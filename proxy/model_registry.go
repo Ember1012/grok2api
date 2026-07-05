@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,26 +15,28 @@ import (
 )
 
 const (
-	OfficialCodexModelsURL = "https://developers.openai.com/codex/models"
+	OfficialGrokModelsURL = "https://docs.x.ai/docs/models"
+	DefaultGrokModelID    = "grok-4.3"
 
-	ModelCategoryCodex = "codex"
+	ModelCategoryText  = "text"
 	ModelCategoryImage = "image"
 
-	ModelSourceBuiltin           = "builtin"
-	ModelSourceOfficialCodexDocs = "official_codex_docs"
-	ModelSourceReasoningEffort   = "reasoning_effort"
+	ModelSourceBuiltin          = "builtin"
+	ModelSourceOfficialGrokDocs = "official_grok_docs"
+	ModelSourceReasoningEffort  = "reasoning_effort"
 )
 
 // ModelInfo describes one model exposed by this proxy.
 type ModelInfo struct {
-	ID                  string     `json:"id"`
-	Enabled             bool       `json:"enabled"`
-	Category            string     `json:"category"`
-	Source              string     `json:"source"`
-	ProOnly             bool       `json:"pro_only"`
-	APIKeyAuthAvailable bool       `json:"api_key_auth_available"`
-	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
-	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+	ID                   string     `json:"id"`
+	Enabled              bool       `json:"enabled"`
+	Category             string     `json:"category"`
+	Source               string     `json:"source"`
+	Capabilities         []string   `json:"capabilities"`
+	ProOnly              bool       `json:"pro_only"`
+	APIKeyAuthAvailable  bool       `json:"api_key_auth_available"`
+	LastSeenAt           *time.Time `json:"last_seen_at,omitempty"`
+	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
 }
 
 // ModelCatalog is the admin-facing model list plus registry metadata.
@@ -60,21 +61,14 @@ type ModelSyncResult struct {
 }
 
 var builtinModelInfos = []ModelInfo{
-	modelInfoForID("gpt-5.5", ModelSourceBuiltin),
-	modelInfoForID("gpt-5.4", ModelSourceBuiltin),
-	modelInfoForID("gpt-5.4-mini", ModelSourceBuiltin),
-	modelInfoForID("gpt-5.3-codex", ModelSourceBuiltin),
-	modelInfoForID("gpt-5.3-codex-spark", ModelSourceBuiltin),
-	modelInfoForID("gpt-5.2", ModelSourceBuiltin),
-	// codex-auto-review — Codex internal auto-review model.
-	// Upstream confirms: returns effective model "gpt-5.4" (tested 2026-05-20).
-	// Available on Plus/Pro/Team/Business per official catalog; excludes free.
-	// Pricing: gpt-5.4 standard ($2.50/$15.00), priority ($5.00/$30.00).
-	// Ref: codex_client_models.json via CLIProxyAPI model registry.
-	modelInfoForID("codex-auto-review", ModelSourceBuiltin),
-	modelInfoForID("gpt-image-2", ModelSourceBuiltin),
-	modelInfoForID("gpt-image-2-2k", ModelSourceBuiltin),
-	modelInfoForID("gpt-image-2-4k", ModelSourceBuiltin),
+	modelInfoForID("grok", ModelSourceBuiltin),
+	modelInfoForID("grok-latest", ModelSourceBuiltin),
+	modelInfoForID(DefaultGrokModelID, ModelSourceBuiltin),
+	modelInfoForID("grok-build-0.1", ModelSourceBuiltin),
+	modelInfoForID("grok-4.20-0309-reasoning", ModelSourceBuiltin),
+	modelInfoForID("grok-4.20-0309-non-reasoning", ModelSourceBuiltin),
+	modelInfoForID("grok-4.20-multi-agent-0309", ModelSourceBuiltin),
+	modelInfoForID("grok-2-image", ModelSourceBuiltin),
 }
 
 // SupportedModels is the static built-in fallback list. Runtime handlers use
@@ -97,17 +91,10 @@ func modelInfoForID(id string, source string) ModelInfo {
 	info := ModelInfo{
 		ID:                  id,
 		Enabled:             true,
-		Category:            ModelCategoryCodex,
+		Category:            ModelCategoryText,
 		Source:              source,
+		Capabilities:        capabilitiesForModelID(id),
 		APIKeyAuthAvailable: true,
-	}
-	switch strings.ToLower(id) {
-	case "gpt-5.3-codex-spark":
-		info.ProOnly = true
-	case "gpt-5.5":
-		info.APIKeyAuthAvailable = false
-	case "gpt-image-2":
-		info.Category = ModelCategoryImage
 	}
 	if strings.Contains(strings.ToLower(id), "image") {
 		info.Category = ModelCategoryImage
@@ -129,8 +116,9 @@ func modelInfoFromRow(row database.ModelRegistryRow) ModelInfo {
 	return ModelInfo{
 		ID:                  row.ID,
 		Enabled:             row.Enabled,
-		Category:            valueOrDefault(row.Category, ModelCategoryCodex),
+		Category:            valueOrDefault(row.Category, ModelCategoryText),
 		Source:              valueOrDefault(row.Source, "manual"),
+		Capabilities:        capabilitiesForModelID(row.ID),
 		ProOnly:             row.ProOnly,
 		APIKeyAuthAvailable: row.APIKeyAuthAvailable,
 		LastSeenAt:          lastSeenAt,
@@ -142,7 +130,7 @@ func modelInfoToRow(info ModelInfo, lastSeenAt time.Time) database.ModelRegistry
 	return database.ModelRegistryRow{
 		ID:                  info.ID,
 		Enabled:             info.Enabled,
-		Category:            valueOrDefault(info.Category, ModelCategoryCodex),
+		Category:            valueOrDefault(info.Category, ModelCategoryText),
 		Source:              valueOrDefault(info.Source, "manual"),
 		ProOnly:             info.ProOnly,
 		APIKeyAuthAvailable: info.APIKeyAuthAvailable,
@@ -190,7 +178,7 @@ func ListModelCatalog(ctx context.Context, db *database.DB) (ModelCatalog, error
 		return catalog, err
 	}
 	if state != nil {
-		catalog.SourceURL = valueOrDefault(state.SourceURL, OfficialCodexModelsURL)
+		catalog.SourceURL = valueOrDefault(state.SourceURL, OfficialGrokModelsURL)
 		if state.LastSyncedAt.Valid {
 			t := state.LastSyncedAt.Time.UTC()
 			catalog.LastSyncedAt = &t
@@ -204,8 +192,13 @@ func builtinCatalog() ModelCatalog {
 	return ModelCatalog{
 		Models:    enabledModelIDs(items, false),
 		Items:     items,
-		SourceURL: OfficialCodexModelsURL,
+		SourceURL: OfficialGrokModelsURL,
 	}
+}
+
+func isGrokModelID(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	return id == "grok" || id == "grok-latest" || strings.HasPrefix(id, "grok-")
 }
 
 func mergeModelInfos(rows []database.ModelRegistryRow) []ModelInfo {
@@ -215,7 +208,7 @@ func mergeModelInfos(rows []database.ModelRegistryRow) []ModelInfo {
 	}
 	for _, row := range rows {
 		info := modelInfoFromRow(row)
-		if info.ID == "" {
+		if info.ID == "" || !isGrokModelID(info.ID) {
 			continue
 		}
 		byID[info.ID] = info
@@ -271,7 +264,7 @@ func appendReasoningEffortModelInfos(items []ModelInfo, settingsJSON string) []M
 		aliasInfo := baseInfo
 		aliasInfo.ID = alias
 		aliasInfo.Source = ModelSourceReasoningEffort
-		aliasInfo.Category = ModelCategoryCodex
+		aliasInfo.Category = ModelCategoryText
 		aliasInfo.LastSeenAt = nil
 		aliasInfo.UpdatedAt = nil
 		result = append(result, aliasInfo)
@@ -331,29 +324,30 @@ func isImageModelInfo(info ModelInfo) bool {
 	return strings.EqualFold(info.Category, ModelCategoryImage) || strings.Contains(strings.ToLower(info.ID), "image")
 }
 
-var codexModelIDPattern = regexp.MustCompile(`\bgpt-[0-9]+(?:\.[0-9]+)*(?:-[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?\b`)
+var grokModelIDPattern = regexp.MustCompile(`\bgrok-[a-z0-9]+(?:[.-][a-z0-9]+)*(?:-[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?\b`)
 
-// ParseOfficialCodexModelIDs extracts allowed Codex model IDs from the official docs HTML.
-func ParseOfficialCodexModelIDs(html string) (models []string, skipped []string) {
+// ParseOfficialGrokModelIDs extracts Grok model IDs from the official docs HTML.
+func ParseOfficialGrokModelIDs(html string) (models []string, skipped []string) {
 	seen := map[string]struct{}{}
-	skippedSeen := map[string]struct{}{}
-	for _, match := range codexModelIDPattern.FindAllString(strings.ToLower(html), -1) {
-		if isAllowedUpstreamCodexModel(match) {
-			if _, ok := seen[match]; !ok {
-				seen[match] = struct{}{}
-				models = append(models, match)
-			}
+	for _, match := range grokModelIDPattern.FindAllString(strings.ToLower(html), -1) {
+		id := strings.TrimSpace(match)
+		if id == "" {
 			continue
 		}
-		if _, ok := skippedSeen[match]; !ok {
-			skippedSeen[match] = struct{}{}
-			skipped = append(skipped, match)
+		if _, ok := seen[id]; ok {
+			continue
 		}
+		seen[id] = struct{}{}
+		models = append(models, id)
 	}
 	sort.SliceStable(models, func(i, j int) bool {
-		return modelSortRank(models[i]) < modelSortRank(models[j])
+		leftRank := modelSortRank(models[i])
+		rightRank := modelSortRank(models[j])
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return models[i] < models[j]
 	})
-	sort.Strings(skipped)
 	return models, skipped
 }
 
@@ -366,43 +360,13 @@ func modelSortRank(id string) int {
 	return len(builtinModelInfos) + 1000
 }
 
-func isAllowedUpstreamCodexModel(id string) bool {
-	id = strings.TrimSpace(strings.ToLower(id))
-	if id == "" || id == "gpt-5.2-codex" || strings.Contains(id, "image") {
-		return false
-	}
-	if !strings.HasPrefix(id, "gpt-") {
-		return false
-	}
-	version := strings.TrimPrefix(id, "gpt-")
-	if dash := strings.IndexByte(version, '-'); dash >= 0 {
-		version = version[:dash]
-	}
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return false
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return false
-	}
-	if major > 5 {
-		return true
-	}
-	return major == 5 && minor >= 2
-}
-
-// SyncOfficialCodexModels fetches the fixed official docs page and merges discovered models.
-func SyncOfficialCodexModels(ctx context.Context, db *database.DB) (*ModelSyncResult, error) {
+// SyncOfficialGrokModels fetches the fixed official docs page and merges discovered models.
+func SyncOfficialGrokModels(ctx context.Context, db *database.DB) (*ModelSyncResult, error) {
 	if db == nil {
 		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, OfficialCodexModelsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, OfficialGrokModelsURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -418,15 +382,15 @@ func SyncOfficialCodexModels(ctx context.Context, db *database.DB) (*ModelSyncRe
 	if err != nil {
 		return nil, err
 	}
-	return ApplyOfficialCodexModelSync(ctx, db, string(body), time.Now().UTC())
+	return ApplyOfficialGrokModelSync(ctx, db, string(body), time.Now().UTC())
 }
 
-// ApplyOfficialCodexModelSync merges a fetched official docs page into the registry.
-func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html string, syncedAt time.Time) (*ModelSyncResult, error) {
+// ApplyOfficialGrokModelSync merges a fetched official docs page into the registry.
+func ApplyOfficialGrokModelSync(ctx context.Context, db *database.DB, html string, syncedAt time.Time) (*ModelSyncResult, error) {
 	if db == nil {
 		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
 	}
-	ids, skipped := ParseOfficialCodexModelIDs(html)
+	ids, skipped := ParseOfficialGrokModelIDs(html)
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("未从官方模型页面解析到可用模型，已保留本地模型列表")
 	}
@@ -443,10 +407,10 @@ func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html stri
 	rows := make([]database.ModelRegistryRow, 0, len(ids))
 	result := &ModelSyncResult{
 		Skipped:   skipped,
-		SourceURL: OfficialCodexModelsURL,
+		SourceURL: OfficialGrokModelsURL,
 	}
 	for _, id := range ids {
-		info := modelInfoForID(id, ModelSourceOfficialCodexDocs)
+		info := modelInfoForID(id, ModelSourceOfficialGrokDocs)
 		row := modelInfoToRow(info, syncedAt)
 		if previous, ok := existing[id]; ok {
 			row.Enabled = previous.Enabled
@@ -464,7 +428,7 @@ func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html stri
 	if err := db.UpsertModelRegistryRows(ctx, rows); err != nil {
 		return nil, err
 	}
-	if err := db.UpdateModelRegistrySyncState(ctx, OfficialCodexModelsURL, syncedAt); err != nil {
+	if err := db.UpdateModelRegistrySyncState(ctx, OfficialGrokModelsURL, syncedAt); err != nil {
 		return nil, err
 	}
 
@@ -480,7 +444,7 @@ func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html stri
 
 func modelRegistryMetadataEqual(a database.ModelRegistryRow, b database.ModelRegistryRow) bool {
 	return a.Enabled == b.Enabled &&
-		valueOrDefault(a.Category, ModelCategoryCodex) == valueOrDefault(b.Category, ModelCategoryCodex) &&
+		valueOrDefault(a.Category, ModelCategoryText) == valueOrDefault(b.Category, ModelCategoryText) &&
 		valueOrDefault(a.Source, "manual") == valueOrDefault(b.Source, "manual") &&
 		a.ProOnly == b.ProOnly &&
 		a.APIKeyAuthAvailable == b.APIKeyAuthAvailable

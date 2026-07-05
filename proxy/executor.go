@@ -279,6 +279,9 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	if len(useWebsocket) > 0 {
 		wantWebsocket = useWebsocket[0]
 	}
+	if account != nil && account.IsGrokPlatform() {
+		wantWebsocket = false
+	}
 	poolRouteKey := ""
 	if wantWebsocket {
 		sessionID = strings.TrimSpace(sessionID)
@@ -360,6 +363,13 @@ func ExecuteRequest(ctx context.Context, account *auth.Account, requestBody []by
 	}
 
 	endpoint := CodexBaseURL + "/responses"
+	if account != nil && account.IsGrokPlatform() {
+		endpointBase := strings.TrimSpace(account.DispatchBaseURL())
+		if endpointBase == "" {
+			endpointBase = "https://api.x.ai/v1"
+		}
+		endpoint = auth.OpenAIResponsesEndpoint(endpointBase, "/v1/responses")
+	}
 
 	// Resin 反向代理模式：改写 URL，使用标准 HTTP 客户端
 	var client *http.Client
@@ -501,8 +511,14 @@ func ExecuteCompactRequest(ctx context.Context, account *auth.Account, requestBo
 		requestBody, _ = sjson.SetBytes(requestBody, "prompt_cache_key", cacheKey)
 	}
 
-	// compact 端点
 	endpoint := CodexBaseURL + "/responses/compact"
+	if account != nil && account.IsGrokPlatform() {
+		endpointBase := strings.TrimSpace(account.DispatchBaseURL())
+		if endpointBase == "" {
+			endpointBase = "https://api.x.ai/v1"
+		}
+		endpoint = auth.OpenAIResponsesEndpoint(endpointBase, "/v1/responses/compact")
+	}
 
 	// Resin 反向代理模式
 	var client *http.Client

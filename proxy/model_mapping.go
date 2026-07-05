@@ -153,16 +153,38 @@ func wildcardModelPatternMatch(pattern string, model string) bool {
 	return true
 }
 
+func resolveGrokPublicModelAlias(model string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "grok", "grok-latest":
+		return DefaultGrokModelID, true
+	default:
+		return strings.TrimSpace(model), false
+	}
+}
+
 func (h *Handler) applyConfiguredModelMappingToBody(rawBody []byte, supportedModels []string) ([]byte, string, string, bool) {
 	originalModel := strings.TrimSpace(gjson.GetBytes(rawBody, "model").String())
 	effectiveModel := originalModel
-	if originalModel == "" || !gjson.ValidBytes(rawBody) || h == nil || h.store == nil {
+	if originalModel == "" || !gjson.ValidBytes(rawBody) {
 		return rawBody, originalModel, effectiveModel, false
 	}
 
 	updatedBody := rawBody
 	modelForMapping := originalModel
 	mappingApplied := false
+	if resolvedModel, ok := resolveGrokPublicModelAlias(modelForMapping); ok {
+		var err error
+		updatedBody, err = sjson.SetBytes(updatedBody, "model", resolvedModel)
+		if err != nil {
+			return rawBody, originalModel, effectiveModel, false
+		}
+		modelForMapping = resolvedModel
+		effectiveModel = resolvedModel
+		mappingApplied = true
+	}
+	if h == nil || h.store == nil {
+		return updatedBody, originalModel, effectiveModel, mappingApplied
+	}
 	if entry, ok := resolveReasoningEffortModelAlias(originalModel, h.store.GetReasoningEffortModels(), supportedModels); ok {
 		var err error
 		updatedBody, err = sjson.SetBytes(updatedBody, "model", entry.Model)
@@ -197,10 +219,17 @@ func (h *Handler) applyConfiguredModelMappingToBody(rawBody []byte, supportedMod
 
 func (h *Handler) resolveConfiguredRequestModel(model string, supportedModels []string) (string, bool) {
 	model = strings.TrimSpace(model)
-	if model == "" || h == nil || h.store == nil {
+	if model == "" {
 		return model, false
 	}
 	resolved := false
+	if resolvedModel, ok := resolveGrokPublicModelAlias(model); ok {
+		model = resolvedModel
+		resolved = true
+	}
+	if h == nil || h.store == nil {
+		return model, resolved
+	}
 	if entry, ok := resolveReasoningEffortModelAlias(model, h.store.GetReasoningEffortModels(), supportedModels); ok {
 		model = entry.Model
 		resolved = true

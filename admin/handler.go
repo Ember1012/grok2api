@@ -461,7 +461,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/oauth/exchange-code", h.ExchangeOAuthCode)
 	api.GET("/oauth/poll-callback", h.PollOAuthCallback)
 
-	// OAuth 回调端点（无需 admin 鉴权，供 OpenAI 重定向调用）
+	// OAuth 回调端点（无需 admin 鉴权，供 xAI 重定向调用）
 	r.GET("/auth/callback", h.OAuthCallback)
 }
 
@@ -2410,8 +2410,12 @@ func (h *Handler) AddOpenAIResponsesAccount(c *gin.Context) {
 	if len(customHeaders) > 0 {
 		credentials["custom_headers"] = cloneCustomHeaders(customHeaders)
 	}
-	id, err := h.db.InsertOpenAIResponsesAccount(ctx, name, credentials, req.ProxyURL)
+	id, err := h.db.InsertAccountWithCredentials(ctx, name, credentials, req.ProxyURL)
 	if err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	if err := h.db.SetAccountPlatform(ctx, id, "openai", auth.UpstreamOpenAIResponses); err != nil {
 		writeInternalError(c, err)
 		return
 	}
@@ -7773,12 +7777,12 @@ func (h *Handler) ListModels(c *gin.Context) {
 	c.JSON(http.StatusOK, catalog)
 }
 
-// SyncModels 从官方 Codex 模型页同步模型注册表。
+// SyncModels 从官方 Grok 模型页同步模型注册表。
 func (h *Handler) SyncModels(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
-	result, err := proxy.SyncOfficialCodexModels(ctx, h.db)
+	result, err := proxy.SyncOfficialGrokModels(ctx, h.db)
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())
 		return

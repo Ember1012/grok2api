@@ -1,0 +1,87 @@
+---
+description: Grok provider implementation boundaries and migration rules
+alwaysApply: true
+---
+
+# Grok Provider Boundary
+
+Implement Grok as the only runtime provider. Do not preserve OpenAI compatibility by adding provider switches, compatibility adapters, or mixed OpenAI/Grok branches unless they are temporary migration scaffolding with a clear removal path.
+
+Use `参考项目/sub2api-main` only as readonly design evidence. Reimplement the behavior inside this project instead of importing, depending on, or copying source code from the reference project.
+
+# Module Shape
+
+Prefer a dedicated Grok provider boundary with these responsibilities:
+
+```text
+GrokProvider
+  config    # xAI endpoints, client_id, scope, base_url, URL allowlist policy
+  oauth     # PKCE auth-url, exchange-code, refresh-token
+  token     # access token cache and refresh policy
+  models    # model list, alias mapping, capability metadata
+  forward   # responses/chat/media upstream forwarding
+  quota     # quota header parser and active probe
+  errors    # entitlement, rate-limit, upstream error classification
+```
+
+Keep data flow one-way:
+
+```text
+admin oauth -> account credentials -> token provider -> upstream forwarder -> quota observer -> runtime account state
+```
+
+Avoid pushing provider-specific state into unrelated admin, database, frontend, or compatibility layers.
+
+# OAuth And Token Rules
+
+- Use xAI OAuth with PKCE: `state`, `nonce`, `session_id`, `code_verifier`, and `S256 code_challenge`.
+- Treat OAuth sessions as short-lived state with explicit TTL. Do not persist transient PKCE verifier state as long-term account data.
+- Store durable account credentials as `access_token`, `refresh_token`, `expires_at`, `token_type`, `client_id`, `scope`, and optional account metadata such as `email`, `subscription_tier`, and `entitlement_status`.
+- Refresh access tokens before expiry. Preserve the previous refresh token when xAI does not return a rotated one.
+- Separate non-retryable refresh failures from temporary upstream/proxy failures. Non-retryable errors should mark the account unhealthy; temporary failures should only make it temporarily unschedulable.
+
+# URL And Security Rules
+
+- Production Grok base URLs must normalize to `/v1` and be host-allowlisted.
+- Unsafe URL overrides are development-only and must require an explicit configuration flag.
+- Never store or log bearer tokens, authorization headers, refresh tokens, or callback URLs with secrets unredacted.
+
+# Models And Capabilities
+
+- Keep public aliases separate from upstream model IDs.
+- Map simple aliases such as `grok` and `grok-latest` to the current default Grok model in one central location.
+- Model capabilities must be explicit. Text, image generation, image edit, video generation, and video status are different capabilities even when they share the Grok provider.
+
+# Forwarding Rules
+
+- Prefer `/responses` as the primary Grok text forwarding path.
+- Patch the upstream request after model mapping and before token injection.
+- Remove known unsupported fields before forwarding, including `prompt_cache_retention`, `safety_identifier`, and recursive `external_web_access`.
+- Use a tool-type allowlist for Grok requests. Unknown tools should be rejected or removed at the provider boundary, not deep inside generic forwarding code.
+- Inject `Authorization: Bearer {access_token}` only in the upstream forwarding layer.
+- Preserve upstream request IDs from both `x-request-id` and `xai-request-id` when reporting errors or usage.
+
+# Media Rules
+
+- Keep Grok media endpoints separate from ordinary chat/completions flow.
+- Model image and video operations as provider capabilities:
+  - `/images/generations`
+  - `/images/edits`
+  - `/videos/generations`
+  - `/videos/{request_id}`
+- Generation requests must check account or group capability before consuming upstream quota.
+- Video status requests should keep stable account affinity by deriving routing state from `request_id`.
+
+# Quota Rules
+
+- Treat xAI quota as observed runtime state, not as authoritative local accounting.
+- Parse only allowlisted headers such as `x-ratelimit-*`, `retry-after`, `xai-subscription-tier`, and `xai-entitlement-status`.
+- Do not persist sensitive response headers.
+- Active quota probes should use a minimal `/responses` request with `input: "."`, `max_output_tokens: 1`, and `store: false`.
+- Do not expose quota reset as supported. xAI OAuth accounts do not provide a reliable subscription quota reset endpoint.
+
+# Migration Rules
+
+- When deleting OpenAI concepts, check backend config, API routes, admin UI, frontend labels, database fields, docs, and tests together.
+- Prefer deleting compatibility branches over adding more flags.
+- If a compatibility path must stay temporarily, name the owner and removal condition in code or migration notes.

@@ -71,6 +71,7 @@ type Account struct {
 	PlanType       string
 	ProxyURL       string
 	CustomHeaders  map[string]string
+	Platform       string
 	UpstreamType   string
 	BaseURL        string
 	APIKey         string
@@ -322,6 +323,36 @@ func (a *Account) OpenAIResponsesCredentials() (baseURL, apiKey string) {
 		return "", ""
 	}
 	return strings.TrimRight(strings.TrimSpace(a.BaseURL), "/"), strings.TrimSpace(a.APIKey)
+}
+
+func (a *Account) IsGrokPlatform() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return strings.EqualFold(strings.TrimSpace(a.Platform), "grok")
+}
+
+func (a *Account) DispatchBaseURL() string {
+	if a == nil {
+		return ""
+	}
+	a.mu.RLock()
+	platform := strings.ToLower(strings.TrimSpace(a.Platform))
+	baseURL := strings.TrimRight(strings.TrimSpace(a.BaseURL), "/")
+	isOpenAIResponses := strings.EqualFold(strings.TrimSpace(a.UpstreamType), UpstreamOpenAIResponses) && baseURL != "" && strings.TrimSpace(a.APIKey) != ""
+	a.mu.RUnlock()
+	if platform == "grok" {
+		if baseURL == "" {
+			return "https://api.x.ai/v1"
+		}
+		return baseURL
+	}
+	if isOpenAIResponses {
+		return baseURL
+	}
+	return ""
 }
 
 func (a *Account) GetProxyURL() string {
@@ -2570,7 +2601,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 		settings = &database.SystemSettings{
 			MaxConcurrency:                     2,
 			TestConcurrency:                    50,
-			TestModel:                          "gpt-5.4",
+			TestModel:                          "grok-4.3",
 			TestContent:                        DefaultTestContent,
 			BackgroundRefreshIntervalMinutes:   2,
 			UsageProbeMaxAgeMinutes:            10,
@@ -3265,10 +3296,14 @@ func (s *Store) buildAccountFromRow(ctx context.Context, row *database.AccountRo
 		CustomHeaders: row.GetCredentialStringMap("custom_headers"),
 		HealthTier:    HealthTierWarm,
 		AddedAt:       row.CreatedAt.UnixNano(),
+		Platform:      strings.TrimSpace(row.Platform),
 		UpstreamType:  upstreamType,
 		BaseURL:       strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		APIKey:        strings.TrimSpace(apiKey),
 		Models:        models,
+	}
+	if account.IsGrokPlatform() && account.BaseURL == "" {
+		account.BaseURL = "https://api.x.ai/v1"
 	}
 	if isOpenAIResponsesAccount {
 		account.HealthTier = HealthTierHealthy
@@ -4300,7 +4335,7 @@ func (s *Store) GetTestModel() string {
 	if v, ok := s.testModel.Load().(string); ok && v != "" {
 		return v
 	}
-	return "gpt-5.4"
+	return "grok-4.3"
 }
 
 // SetTestContent dynamically updates connection test input text.
@@ -5039,6 +5074,7 @@ func (s *Store) ApplyOpenAIResponsesConfig(dbID int64, baseURL, apiKey string, m
 	}
 
 	acc.mu.Lock()
+	acc.Platform = "openai"
 	acc.UpstreamType = UpstreamOpenAIResponses
 	acc.BaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.TrimSpace(apiKey) != "" {
@@ -6397,7 +6433,9 @@ func (s *Store) refreshAccountWithOptions(ctx context.Context, acc *Account, for
 	}
 	if err != nil && st != "" {
 		rtErr := err
-		if stTD, stInfo, stErr := RefreshWithSessionTokenRetry(ctx, st, proxy, resinID); stErr == nil {
+		if acc.IsGrokPlatform() {
+			err = rtErr
+		} else if stTD, stInfo, stErr := RefreshWithSessionTokenRetry(ctx, st, proxy, resinID); stErr == nil {
 			td, info, err = stTD, stInfo, nil
 			if td.RefreshToken == "" {
 				td.RefreshToken = rt

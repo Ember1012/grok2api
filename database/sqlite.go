@@ -88,7 +88,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS accounts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT DEFAULT '',
-			platform TEXT DEFAULT 'openai',
+			platform TEXT DEFAULT 'grok',
 			type TEXT DEFAULT 'oauth',
 			credentials TEXT NOT NULL DEFAULT '{}',
 			proxy_url TEXT DEFAULT '',
@@ -184,7 +184,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 					background_config TEXT DEFAULT '{}',
 					max_concurrency INTEGER DEFAULT 2,
 				global_rpm INTEGER DEFAULT 0,
-				test_model TEXT DEFAULT 'gpt-5.4',
+				test_model TEXT DEFAULT 'grok-4.3',
 				test_content TEXT DEFAULT 'hi',
 				test_concurrency INTEGER DEFAULT 50,
 				proxy_url TEXT DEFAULT '',

@@ -180,6 +180,57 @@ func TestSQLiteUpdateCredentialsMergesAtomically(t *testing.T) {
 	}
 }
 
+func TestUpdateOAuthAccountCredentialsPreservesPlatform(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	id, err := db.InsertAccountWithCredentials(ctx, "grok-oauth", map[string]interface{}{
+		"refresh_token": "old-refresh",
+		"email":         "grok@example.com",
+		"account_id":    "acc-grok",
+	}, "http://old-proxy.example")
+	if err != nil {
+		t.Fatalf("InsertAccountWithCredentials 返回错误: %v", err)
+	}
+	if err := db.SetAccountPlatform(ctx, id, "grok", "oauth"); err != nil {
+		t.Fatalf("SetAccountPlatform 返回错误: %v", err)
+	}
+
+	if err := db.UpdateOAuthAccountCredentials(ctx, id, map[string]interface{}{
+		"refresh_token": "new-refresh",
+		"access_token":  "new-access",
+		"id_token":      "new-id",
+	}, "http://new-proxy.example"); err != nil {
+		t.Fatalf("UpdateOAuthAccountCredentials 返回错误: %v", err)
+	}
+
+	row, err := db.GetAccountByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetAccountByID 返回错误: %v", err)
+	}
+	if row.Platform != "grok" {
+		t.Fatalf("platform = %q, want grok", row.Platform)
+	}
+	if row.Type != "oauth" {
+		t.Fatalf("type = %q, want oauth", row.Type)
+	}
+	if row.ProxyURL != "http://new-proxy.example" {
+		t.Fatalf("proxy_url = %q, want updated proxy", row.ProxyURL)
+	}
+	if got := row.GetCredential("refresh_token"); got != "new-refresh" {
+		t.Fatalf("refresh_token = %q, want new-refresh", got)
+	}
+	if got := row.GetCredential("access_token"); got != "new-access" {
+		t.Fatalf("access_token = %q, want new-access", got)
+	}
+}
+
 func TestFindActiveAccountByOAuthIdentity(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 

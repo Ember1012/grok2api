@@ -17,12 +17,12 @@ import (
 	"time"
 )
 
-// OpenAI OAuth 常量（与 CLIProxyAPI / sub2api 一致）
+// xAI OAuth/refresh 常量。
 const (
-	TokenURL      = "https://auth.openai.com/oauth/token"
+	TokenURL      = "https://auth.x.ai/oauth2/token"
 	SessionURL    = "https://chatgpt.com/api/auth/session"
-	ClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
-	RefreshScopes = "openid profile email"
+	ClientID      = "b1a00492-073a-47ea-816f-4c329264a828"
+	RefreshScopes = "openid profile email offline_access grok-cli:access api:access"
 	MaxRetries    = 3
 )
 

@@ -7,6 +7,32 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestGrokPublicAliasesResolveToDefaultModel(t *testing.T) {
+	for _, alias := range []string{"grok", "grok-latest", "GROK-LATEST"} {
+		resolved, ok := resolveGrokPublicModelAlias(alias)
+		if !ok {
+			t.Fatalf("expected alias %q to resolve", alias)
+		}
+		if resolved != DefaultGrokModelID {
+			t.Fatalf("resolved model = %q, want %q", resolved, DefaultGrokModelID)
+		}
+	}
+}
+
+func TestApplyModelMappingNormalizesGrokAliasWithoutStore(t *testing.T) {
+	handler := &Handler{}
+	body, original, effective, applied := handler.applyConfiguredModelMappingToBody(
+		[]byte(`{"model":"grok-latest","input":"hello"}`),
+		BuiltinModelIDs(),
+	)
+	if !applied || original != "grok-latest" || effective != DefaultGrokModelID {
+		t.Fatalf("mapping result applied=%v original=%q effective=%q", applied, original, effective)
+	}
+	if got := gjson.GetBytes(body, "model").String(); got != DefaultGrokModelID {
+		t.Fatalf("body model = %q, want %q", got, DefaultGrokModelID)
+	}
+}
+
 func TestResolveConfiguredModelMappingExactAndWildcard(t *testing.T) {
 	mapping := `{
 		"gpt-*": "gpt-5.5",

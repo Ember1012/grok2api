@@ -22,6 +22,8 @@ type tokenCredentialSeed struct {
 	// 持久化为 credentials.allow_duplicate，身份判重与启动时的 dedupe 迁移
 	// 都会跳过带标记的账号，避免把用户故意保留的重复当垃圾合并。
 	allowDuplicate        bool
+	platform              string
+	baseURL               string
 	email                 string
 	planType              string
 	expiresAt             time.Time
@@ -45,6 +47,8 @@ func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed 
 	seed.idToken = strings.TrimSpace(seed.idToken)
 	seed.accountID = strings.TrimSpace(seed.accountID)
 	seed.userID = strings.TrimSpace(seed.userID)
+	seed.platform = strings.TrimSpace(seed.platform)
+	seed.baseURL = strings.TrimSpace(seed.baseURL)
 	seed.email = strings.TrimSpace(seed.email)
 	seed.planType = strings.TrimSpace(seed.planType)
 	seed.expiresAtRaw = strings.TrimSpace(seed.expiresAtRaw)
@@ -90,6 +94,9 @@ func normalizeTokenCredentialSeed(seed tokenCredentialSeed) tokenCredentialSeed 
 	}
 	if seed.expiresAt.IsZero() && seed.expiresAtRaw != "" {
 		seed.expiresAt = parseCredentialExpiresAt(seed.expiresAtRaw)
+	}
+	if strings.EqualFold(seed.platform, "grok") && seed.baseURL == "" {
+		seed.baseURL = "https://api.x.ai/v1"
 	}
 	if seed.expiresAt.IsZero() && seed.accessToken != "" {
 		seed.expiresAt = time.Now().Add(time.Hour)
@@ -162,6 +169,9 @@ func tokenCredentialMap(seed tokenCredentialSeed) map[string]interface{} {
 	if seed.allowDuplicate {
 		credentials["allow_duplicate"] = "true"
 	}
+	if seed.baseURL != "" {
+		credentials["base_url"] = seed.baseURL
+	}
 	if seed.email != "" {
 		credentials["email"] = seed.email
 	}
@@ -210,6 +220,8 @@ func accountFromCredentialSeed(id int64, proxyURL string, seed tokenCredentialSe
 		CustomHeaders:         cloneCustomHeaders(seed.customHeaders),
 		Status:                auth.StatusReady,
 		SubscriptionExpiresAt: seed.subscriptionExpiresAt,
+		Platform:              seed.platform,
+		BaseURL:               strings.TrimRight(strings.TrimSpace(seed.baseURL), "/"),
 	}
 	if pct, ok := parseSeedUsagePercent(seed.codex7DUsedPercent); ok {
 		updatedAt := parseSeedRFC3339(seed.codexUsageUpdatedAt)

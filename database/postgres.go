@@ -582,7 +582,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	CREATE TABLE IF NOT EXISTS accounts (
 		id            SERIAL PRIMARY KEY,
 		name          VARCHAR(255) DEFAULT '',
-		platform      VARCHAR(50) DEFAULT 'openai',
+		platform      VARCHAR(50) DEFAULT 'grok',
 		type          VARCHAR(50) DEFAULT 'oauth',
 		credentials   JSONB NOT NULL DEFAULT '{}',
 		proxy_url     VARCHAR(500) DEFAULT '',
@@ -728,7 +728,7 @@ func (db *DB) migrate(ctx context.Context) error {
 				background_config  TEXT DEFAULT '{}',
 				max_concurrency    INT DEFAULT 2,
 			global_rpm         INT DEFAULT 0,
-			test_model         VARCHAR(100) DEFAULT 'gpt-5.4',
+			test_model         VARCHAR(100) DEFAULT 'grok-4.3',
 			test_content       TEXT DEFAULT 'hi',
 			test_concurrency   INT DEFAULT 50,
 			proxy_url          VARCHAR(500) DEFAULT '',
@@ -4813,9 +4813,9 @@ func (db *DB) UpdateOAuthAccountCredentials(ctx context.Context, id int64, crede
 		return fmt.Errorf("序列化 credentials 失败: %w", err)
 	}
 
-	updateQuery := `UPDATE accounts SET credentials = $1, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+	updateQuery := `UPDATE accounts SET credentials = $1, proxy_url = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
 	if !db.isSQLite() {
-		updateQuery = `UPDATE accounts SET credentials = $1::jsonb, proxy_url = $2, platform = 'openai', type = 'oauth', updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+		updateQuery = `UPDATE accounts SET credentials = $1::jsonb, proxy_url = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
 	}
 	res, err := tx.ExecContext(ctx, updateQuery, credJSON, proxyURL, id)
 	if err != nil {
@@ -5235,20 +5235,31 @@ func (db *DB) InsertAccountWithCredentials(ctx context.Context, name string, cre
 	)
 }
 
-func (db *DB) InsertOpenAIResponsesAccount(ctx context.Context, name string, credentials map[string]interface{}, proxyURL string) (int64, error) {
-	if credentials == nil {
-		credentials = map[string]interface{}{}
+func (db *DB) SetAccountPlatform(ctx context.Context, id int64, platform, accountType string) error {
+	platform = strings.TrimSpace(platform)
+	accountType = strings.TrimSpace(accountType)
+	if platform == "" {
+		return fmt.Errorf("platform is required")
 	}
-	credJSON, err := json.Marshal(credentials)
+	if accountType == "" {
+		accountType = "oauth"
+	}
+	query := `UPDATE accounts SET platform = $1, type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+	if db.isSQLite() {
+		query = `UPDATE accounts SET platform = $1, type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`
+	}
+	res, err := db.conn.ExecContext(ctx, query, platform, accountType, id)
 	if err != nil {
-		return 0, err
+		return err
 	}
-
-	return db.insertRowID(ctx,
-		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, 'openai', 'responses_api', $2, $3) RETURNING id`,
-		`INSERT INTO accounts (name, platform, type, credentials, proxy_url) VALUES ($1, 'openai', 'responses_api', $2, $3)`,
-		name, credJSON, proxyURL,
-	)
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GetAllAccessTokens 获取所有已存在的 access_token（用于 AT 导入去重，排除已删除账号）

@@ -760,6 +760,7 @@ export interface ModelInfo {
   enabled: boolean
   category: string
   source: string
+  capabilities: string[]
   pro_only: boolean
   api_key_auth_available: boolean
   last_seen_at?: string
@@ -1268,7 +1269,10 @@ export type ApiListResponse<K extends string, T> = {
 export interface OAuthURLResponse {
   auth_url: string
   session_id: string
+  state?: string
 }
+
+export type GrokOAuthURLResponse = OAuthURLResponse
 
 export interface UpdateOAuthAccountRequest {
   session_id: string
@@ -1277,9 +1281,13 @@ export interface UpdateOAuthAccountRequest {
   proxy_url?: string
 }
 
+export type UpdateGrokOAuthAccountRequest = UpdateOAuthAccountRequest
+
 export interface OAuthExchangeResponse {
   message: string
   id: number
   email: string
   plan_type: string
 }
+
+export type GrokOAuthExchangeResponse = OAuthExchangeResponse

@@ -1253,10 +1253,11 @@ export default function Settings() {
     return modelList.map((id) => ({
       id,
       enabled: true,
-      category: id.includes('image') ? 'image' : 'codex',
+      category: id.includes('image') ? 'image' : 'text',
       source: 'builtin',
-      pro_only: id === 'gpt-5.3-codex-spark',
-      api_key_auth_available: id !== 'gpt-5.5',
+      capabilities: id.includes('image') ? ['image_generation'] : ['text'],
+      pro_only: false,
+      api_key_auth_available: true,
     }))
   }, [modelItems, modelList])
   const codexModelOptions = visibleModelItems

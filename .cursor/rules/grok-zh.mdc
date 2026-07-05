@@ -1,0 +1,87 @@
+---
+description: Grok provider 实现边界与迁移规则
+alwaysApply: true
+---
+
+# Grok Provider 边界
+
+将 Grok 实现为唯一运行时 provider。不要为了保留 OpenAI 兼容性继续增加 provider switch、兼容适配层，或混合 OpenAI/Grok 分支，除非它们是有明确移除路径的临时迁移脚手架。
+
+`参考项目/sub2api-main` 只能作为只读设计依据。需要在当前项目内重新实现对应行为，不能从参考项目导入、依赖或复制源码。
+
+# 模块形态
+
+优先建立独立的 Grok provider 边界，并按以下职责组织：
+
+```text
+GrokProvider
+  config    # xAI endpoints、client_id、scope、base_url、URL allowlist 策略
+  oauth     # PKCE auth-url、exchange-code、refresh-token
+  token     # access token 缓存与刷新策略
+  models    # 模型列表、别名映射、能力元数据
+  forward   # responses/chat/media 上游转发
+  quota     # quota header 解析与主动探测
+  errors    # entitlement、rate-limit、upstream error 分类
+```
+
+保持数据流单向：
+
+```text
+admin oauth -> account credentials -> token provider -> upstream forwarder -> quota observer -> runtime account state
+```
+
+避免把 provider 专属状态扩散到无关的 admin、database、frontend 或兼容层。
+
+# OAuth 与 Token 规则
+
+- 使用带 PKCE 的 xAI OAuth：`state`、`nonce`、`session_id`、`code_verifier`、`S256 code_challenge`。
+- OAuth session 是短生命周期状态，必须有明确 TTL。不要把临时 PKCE verifier 持久化为长期账号数据。
+- 长期账号凭据只保存 `access_token`、`refresh_token`、`expires_at`、`token_type`、`client_id`、`scope`，以及可选账号元数据，如 `email`、`subscription_tier`、`entitlement_status`。
+- access token 应在过期前刷新。xAI 未返回轮换后的 refresh token 时，保留旧 refresh token。
+- 区分不可重试刷新失败与临时上游/代理失败。不可重试错误应标记账号不健康；临时失败只应让账号临时不可调度。
+
+# URL 与安全规则
+
+- 生产环境 Grok base URL 必须规范化到 `/v1`，并通过 host allowlist 校验。
+- unsafe URL override 只能用于开发环境，并且必须由显式配置开关启用。
+- 不要未脱敏地存储或记录 bearer token、authorization header、refresh token，或包含 secret 的 callback URL。
+
+# 模型与能力规则
+
+- 用户侧公开别名与上游模型 ID 必须分离。
+- `grok`、`grok-latest` 这类简单别名应在一个中心位置映射到当前默认 Grok 模型。
+- 模型能力必须显式表达。文本、图片生成、图片编辑、视频生成、视频状态查询是不同能力，即使它们都属于 Grok provider。
+
+# 转发规则
+
+- 优先将 `/responses` 作为 Grok 文本转发主路径。
+- 在模型映射之后、token 注入之前 patch 上游请求。
+- 转发前移除已知不支持字段，包括 `prompt_cache_retention`、`safety_identifier`，以及递归出现的 `external_web_access`。
+- Grok 请求应使用 tool type allowlist。未知 tool 应在 provider 边界拒绝或移除，不要把这类判断下沉到通用转发深层。
+- 只在上游转发层注入 `Authorization: Bearer {access_token}`。
+- 报告错误或 usage 时，同时兼容 `x-request-id` 与 `xai-request-id`。
+
+# 媒体规则
+
+- Grok media endpoint 必须与普通 chat/completions 流程分离。
+- 将图片和视频操作建模为 provider capability：
+  - `/images/generations`
+  - `/images/edits`
+  - `/videos/generations`
+  - `/videos/{request_id}`
+- 生成类请求在消耗上游 quota 前，必须先检查 account 或 group 是否具备对应能力。
+- 视频状态查询应基于 `request_id` 派生路由状态，保持稳定账号亲和性。
+
+# Quota 规则
+
+- 将 xAI quota 视为观测到的运行时状态，不要把它当成本地权威计费状态。
+- 只解析 allowlist header，例如 `x-ratelimit-*`、`retry-after`、`xai-subscription-tier`、`xai-entitlement-status`。
+- 不要持久化敏感响应 header。
+- 主动 quota probe 应使用最小 `/responses` 请求：`input: "."`、`max_output_tokens: 1`、`store: false`。
+- 不要把 quota reset 暴露为已支持能力。xAI OAuth 账号没有可靠的订阅 quota reset endpoint。
+
+# 迁移规则
+
+- 删除 OpenAI 概念时，要同步检查 backend config、API routes、admin UI、frontend labels、database fields、docs 和 tests。
+- 优先删除兼容分支，而不是继续添加更多 flags。
+- 如果某条兼容路径必须临时保留，需要在代码或迁移说明中标明 owner 与移除条件。

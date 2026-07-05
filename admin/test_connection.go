@@ -24,6 +24,18 @@ import (
 var batchTestAccountTimeout = 30 * time.Second
 var batchTestWhamTimeout = 5 * time.Second
 
+const defaultGrokConnectionTestModel = proxy.DefaultGrokModelID
+
+var grokConnectionTestModels = []string{
+	"grok",
+	"grok-latest",
+	defaultGrokConnectionTestModel,
+	"grok-build-0.1",
+	"grok-4.20-0309-reasoning",
+	"grok-4.20-0309-non-reasoning",
+	"grok-4.20-multi-agent-0309",
+}
+
 // testEvent SSE 测试事件
 type testEvent struct {
 	Type    string `json:"type"`              // test_start | content | test_complete | error
@@ -475,6 +487,11 @@ func isSupportedConnectionTestModel(model string) bool {
 	if strings.Contains(strings.ToLower(model), "image") {
 		return false
 	}
+	for _, supported := range grokConnectionTestModels {
+		if model == supported {
+			return true
+		}
+	}
 	for _, supported := range proxy.SupportedModels {
 		if model == supported {
 			return true
@@ -483,25 +500,41 @@ func isSupportedConnectionTestModel(model string) bool {
 	return false
 }
 
+func isGrokConnectionTestModel(model string) bool {
+	model = strings.TrimSpace(model)
+	for _, supported := range grokConnectionTestModels {
+		if strings.EqualFold(model, supported) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) connectionTestModel(ctx context.Context) string {
 	model := strings.TrimSpace(h.store.GetTestModel())
-	if proxy.IsTextTestModelID(ctx, h.db, model) {
+	if isGrokConnectionTestModel(model) || proxy.IsTextTestModelID(ctx, h.db, model) {
 		return model
 	}
-	models := proxy.TextTestModelIDs(ctx, h.db)
-	if len(models) > 0 {
-		return models[0]
+	return defaultGrokConnectionTestModel
+}
+
+func defaultGrokConnectionTestModelForAccount(account *auth.Account) string {
+	if account != nil && account.IsGrokPlatform() {
+		return defaultGrokConnectionTestModel
 	}
-	return "gpt-5.4"
+	return ""
 }
 
 func (h *Handler) connectionTestModelForAccount(ctx context.Context, account *auth.Account, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	if account == nil || !account.IsOpenAIResponsesAPI() {
 		if requested == "" {
+			if defaultModel := defaultGrokConnectionTestModelForAccount(account); defaultModel != "" {
+				return defaultModel, nil
+			}
 			return h.connectionTestModel(ctx), nil
 		}
-		if !proxy.IsTextTestModelID(ctx, h.db, requested) {
+		if !isSupportedConnectionTestModel(requested) && !proxy.IsTextTestModelID(ctx, h.db, requested) {
 			return "", fmt.Errorf("不支持的测试模型: %s", requested)
 		}
 		return requested, nil

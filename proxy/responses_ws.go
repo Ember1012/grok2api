@@ -191,6 +191,8 @@ func (h *Handler) forwardResponsesWebSocketTurn(c *gin.Context, conn *websocket.
 		c.Set("x-service-tier", resolveServiceTier("", serviceTier))
 	}
 
+	rawBody = patchGrokRequestForModel(rawBody, model)
+	c.Set("raw_body", rawBody)
 	codexBody, expandedInputRaw := PrepareResponsesWebSocketBody(rawBody)
 	if err := validateResponsesImageGenerationSizes(codexBody); err != nil {
 		apiErr = api.NewAPIError(api.ErrCodeInvalidParameter, err.Error(), api.ErrorTypeInvalidRequest)

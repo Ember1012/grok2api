@@ -1498,6 +1498,8 @@ func (h *Handler) Responses(c *gin.Context) {
 
 	// 2. 准备 Codex 上游请求体（Unmarshal→map→Marshal，一次序列化）。
 	// OpenAI Responses relay body 仅在实际命中 relay 账号时惰性生成，避免 Codex 路径重复转换。
+	rawBody = patchGrokRequestForModel(rawBody, model)
+	setRawRequestBody(c, rawBody)
 	codexBody, expandedInputRaw := PrepareResponsesBody(rawBody)
 	var openAIResponsesBody []byte
 	resetOpenAIResponsesBody := func() {
@@ -2879,7 +2881,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 	responseModel := logModel
 	if model == "" {
-		model = "gpt-5.4"
+		model = DefaultGrokModelID
 		logModel = model
 		responseModel = model
 	}
@@ -2912,6 +2914,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Request translation failed: "+err.Error(), api.ErrorTypeInvalidRequest))
 		return
 	}
+	codexBody = patchGrokRequestForModel(codexBody, model)
 	effectiveModel := effectiveRequestModel(codexBody, model)
 	logEffectiveModel := usageEffectiveModelForMapping(logModel, effectiveModel, mappingApplied)
 	if h.enforceAPIKeyLimitsAndReply(c, effectiveModel) {
@@ -4080,7 +4083,7 @@ func (h *Handler) ListModels(c *gin.Context) {
 			ID:      id,
 			Object:  "model",
 			Created: now,
-			OwnedBy: "openai",
+			OwnedBy: "xai",
 		})
 	}
 	api.SendList(c, "list", models)

@@ -28,11 +28,11 @@ import (
 // ==================== OAuth 常量 ====================
 
 const (
-	oauthAuthorizeURL       = "https://auth.openai.com/oauth/authorize"
-	oauthTokenURL           = "https://auth.openai.com/oauth/token"
-	oauthClientID           = "app_EMoamEEZ73f0CkXaXp7hrann"
-	oauthDefaultRedirectURI = "http://localhost:1455/auth/callback"
-	oauthDefaultScopes      = "openid profile email offline_access"
+	oauthAuthorizeURL       = "https://auth.x.ai/oauth2/authorize"
+	oauthTokenURL           = "https://auth.x.ai/oauth2/token"
+	oauthClientID           = "b1a00492-073a-47ea-816f-4c329264a828"
+	oauthDefaultRedirectURI = "http://127.0.0.1:56121/callback"
+	oauthDefaultScopes      = "openid profile email offline_access grok-cli:access api:access"
 	oauthSessionTTL         = 30 * time.Minute
 )
 
@@ -138,7 +138,7 @@ func oauthCodeChallenge(verifier string) string {
 
 // ==================== Handlers ====================
 
-// GenerateOAuthURL 生成 Codex CLI PKCE OAuth 授权 URL
+// GenerateOAuthURL 生成 Grok xAI PKCE OAuth 授权 URL
 // POST /api/admin/oauth/generate-auth-url
 func (h *Handler) GenerateOAuthURL(c *gin.Context) {
 	var req struct {
@@ -149,8 +149,6 @@ func (h *Handler) GenerateOAuthURL(c *gin.Context) {
 
 	redirectURI := strings.TrimSpace(req.RedirectURI)
 	if redirectURI == "" {
-		// OpenAI OAuth 仅注册了 localhost:1455 回调，始终使用固定默认值
-		// 避免因请求 Host 端口不同（如 localhost:3000）导致回调校验失败（#80）
 		redirectURI = oauthDefaultRedirectURI
 	}
 
@@ -192,6 +190,7 @@ func (h *Handler) GenerateOAuthURL(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"auth_url":   oauthAuthorizeURL + "?" + params.Encode(),
 		"session_id": sessionID,
+		"state":      state,
 	})
 }
 
@@ -250,6 +249,8 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 		accessToken:  tokenResp.AccessToken,
 		idToken:      tokenResp.IDToken,
 		expiresIn:    tokenResp.ExpiresIn,
+		platform:     "grok",
+		baseURL:      "https://api.x.ai/v1",
 	})
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
@@ -285,9 +286,9 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 		planType = seed.planType
 	}
 
-	message := fmt.Sprintf("OAuth 账号 %s 添加成功", name)
+	message := fmt.Sprintf("Grok 账号 %s 添加成功", name)
 	if updated {
-		message = fmt.Sprintf("OAuth 账号已存在，已更新账号 %d", id)
+		message = fmt.Sprintf("Grok 账号已存在，已更新账号 %d", id)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"message":   message,
@@ -301,7 +302,7 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 var errDuplicateOAuthIdentity = errors.New("duplicate oauth identity")
 
 func oauthIdentityDuplicateMessage(id int64) string {
-	return fmt.Sprintf("OAuth 账号已存在 (id=%d)，请更新已有账号", id)
+	return fmt.Sprintf("Grok 账号已存在 (id=%d)，请更新已有账号", id)
 }
 
 func (h *Handler) findOAuthIdentityDuplicate(ctx context.Context, seed tokenCredentialSeed, excludeID int64) (int64, error) {
@@ -335,6 +336,9 @@ func (h *Handler) upsertOAuthIdentityAccount(ctx context.Context, name, proxyURL
 		if err != nil {
 			return 0, false, err
 		}
+		if err := h.db.SetAccountPlatform(ctx, id, "grok", "oauth"); err != nil {
+			return 0, false, err
+		}
 		h.db.InsertAccountEventAsync(id, "added", source)
 		h.loadInsertedTokenAccount(id, proxyURL, seed, source)
 		return id, false, nil
@@ -354,6 +358,9 @@ func (h *Handler) upsertOAuthIdentityAccount(ctx context.Context, name, proxyURL
 		if err := h.db.UpdateOAuthAccountCredentials(ctx, duplicateID, tokenCredentialMap(seed), effectiveProxyURL); err != nil {
 			return 0, false, err
 		}
+		if err := h.db.SetAccountPlatform(ctx, duplicateID, "grok", "oauth"); err != nil {
+			return 0, false, err
+		}
 		// 重新导入有效凭证时，若该账号此前处于错误/封禁（401）态，清除错误状态，
 		// 让重新加载后的运行时账号脱离 banned，并交由后续 probe 重新判定。
 		// 仅针对 error / unauthorized，避免误清合法的限速冷却（rate_limited）。
@@ -371,6 +378,9 @@ func (h *Handler) upsertOAuthIdentityAccount(ctx context.Context, name, proxyURL
 
 	id, err := h.db.InsertAccountWithCredentials(ctx, name, tokenCredentialMap(seed), proxyURL)
 	if err != nil {
+		return 0, false, err
+	}
+	if err := h.db.SetAccountPlatform(ctx, id, "grok", "oauth"); err != nil {
 		return 0, false, err
 	}
 	h.db.InsertAccountEventAsync(id, "added", source)
@@ -508,6 +518,8 @@ func (h *Handler) UpdateOAuthAccountCode(c *gin.Context) {
 		accessToken:  tokenResp.AccessToken,
 		idToken:      tokenResp.IDToken,
 		expiresIn:    tokenResp.ExpiresIn,
+		platform:     "grok",
+		baseURL:      "https://api.x.ai/v1",
 	})
 	if duplicateID, err := h.findOAuthIdentityDuplicate(ctx, seed, id); err != nil {
 		writeInternalError(c, err)
@@ -623,7 +635,7 @@ func doOAuthCodeExchange(ctx context.Context, code, codeVerifier, redirectURI, p
 
 // ==================== OAuth 自动回调捕获 ====================
 
-// OAuthCallback 接收 OpenAI OAuth 回调，自动完成 code exchange 并添加账号
+// OAuthCallback 接收 Grok xAI OAuth 回调，自动完成 code exchange 并添加账号
 // GET /auth/callback?code=xxx&state=xxx
 func (h *Handler) OAuthCallback(c *gin.Context) {
 	code := c.Query("code")
@@ -675,6 +687,8 @@ func (h *Handler) OAuthCallback(c *gin.Context) {
 		accessToken:  tokenResp.AccessToken,
 		idToken:      tokenResp.IDToken,
 		expiresIn:    tokenResp.ExpiresIn,
+		platform:     "grok",
+		baseURL:      "https://api.x.ai/v1",
 	})
 
 	// 自动添加账号

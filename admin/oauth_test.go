@@ -393,7 +393,7 @@ func TestUpdateOAuthAccountCodeRejectsNonOAuthAccount(t *testing.T) {
 	store := auth.NewStore(db, cache.NewMemory(1), nil)
 	handler := &Handler{db: db, store: store}
 
-	id, err := db.InsertOpenAIResponsesAccount(context.Background(), "responses", map[string]interface{}{
+	id, err := db.InsertAccountWithCredentials(context.Background(), "responses", map[string]interface{}{
 		"upstream_type": auth.UpstreamOpenAIResponses,
 		"base_url":      "https://api.openai.com",
 		"api_key":       "sk-test",
@@ -402,7 +402,10 @@ func TestUpdateOAuthAccountCodeRejectsNonOAuthAccount(t *testing.T) {
 		"email":         "https://api.openai.com",
 	}, "")
 	if err != nil {
-		t.Fatalf("InsertOpenAIResponsesAccount: %v", err)
+		t.Fatalf("InsertAccountWithCredentials: %v", err)
+	}
+	if err := db.SetAccountPlatform(context.Background(), id, "grok", auth.UpstreamOpenAIResponses); err != nil {
+		t.Fatalf("SetAccountPlatform: %v", err)
 	}
 
 	recorder := httptest.NewRecorder()

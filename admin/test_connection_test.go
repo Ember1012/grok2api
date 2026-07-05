@@ -14,10 +14,10 @@ import (
 )
 
 func TestConnectionTestModelValidation(t *testing.T) {
-	if !isSupportedConnectionTestModel("gpt-5.5") {
-		t.Fatal("gpt-5.5 should be allowed for connection tests")
+	if !isSupportedConnectionTestModel("grok-4.3") {
+		t.Fatal("grok-4.3 should be allowed for connection tests")
 	}
-	if isSupportedConnectionTestModel("gpt-image-2") {
+	if isSupportedConnectionTestModel("grok-2-image") {
 		t.Fatal("image models should not be allowed for connection tests")
 	}
 	if isSupportedConnectionTestModel("unknown-model") {
@@ -26,9 +26,9 @@ func TestConnectionTestModelValidation(t *testing.T) {
 }
 
 func TestBuildTestPayloadUsesSelectedModel(t *testing.T) {
-	payload := buildTestPayload("gpt-5.5")
-	if got := gjson.GetBytes(payload, "model").String(); got != "gpt-5.5" {
-		t.Fatalf("model = %q, want gpt-5.5", got)
+	payload := buildTestPayload("grok-4.3")
+	if got := gjson.GetBytes(payload, "model").String(); got != "grok-4.3" {
+		t.Fatalf("model = %q, want grok-4.3", got)
 	}
 	if !gjson.GetBytes(payload, "stream").Bool() {
 		t.Fatal("stream should be true")
@@ -39,7 +39,7 @@ func TestBuildConnectionTestPayloadUsesStoreContent(t *testing.T) {
 	store := auth.NewStore(nil, nil, nil)
 	store.SetTestContent("say pong")
 
-	payload := buildConnectionTestPayload(store, "gpt-5.5")
+	payload := buildConnectionTestPayload(store, "grok-4.3")
 	if got := gjson.GetBytes(payload, "input.0.content.0.text").String(); got != "say pong" {
 		t.Fatalf("test content = %q, want say pong", got)
 	}

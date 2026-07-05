@@ -30,6 +30,10 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 		return nil
 	}
 
+	if account.IsGrokPlatform() {
+		return h.probeUsageViaResponses(ctx, account)
+	}
+
 	// 限流/冷却（429 或 premium 5h 限流）状态下只做 wham（零成本），
 	// 失败也不回退 /responses，避免加重限流或额外消耗额度。
 	limited := account.InLimitedState()

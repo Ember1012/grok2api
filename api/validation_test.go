@@ -9,6 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestValidateResponsesAPIRequestAllowsDefaultGrokModel(t *testing.T) {
+	result := ValidateResponsesAPIRequest(
+		[]byte(`{"model":"grok-4.3","input":"hello"}`),
+		[]string{"grok", "grok-latest", "grok-4.3"},
+	)
+
+	if !result.Valid {
+		t.Fatalf("expected default Grok model to be valid, got %#v", result.Errors)
+	}
+}
+
 func TestValidateResponsesAPIRequestRejectsUnsupportedModel(t *testing.T) {
 	result := ValidateResponsesAPIRequest(
 		[]byte(`{"model":"gpt-unknown","input":"hello"}`),

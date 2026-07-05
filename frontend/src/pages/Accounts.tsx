@@ -83,7 +83,6 @@ import {
   LayoutGrid,
   Rows3,
   Recycle,
-  Mail,
   ArchiveRestore,
   ArrowLeft,
   ToggleLeft,
@@ -92,7 +91,6 @@ import {
 import { useTranslation } from "react-i18next";
 import AccountUsageModal from "../components/AccountUsageModal";
 import AccountHealthBar from "../components/AccountHealthBar";
-import CodexInviteView from "../components/CodexInviteView";
 import Sub2APIImportModal from "../components/Sub2APIImportModal";
 import AccountQuotaDistributionChart from "../components/AccountQuotaDistributionChart";
 import AccountRateLimitRecoveryChart from "../components/AccountRateLimitRecoveryChart";
@@ -110,6 +108,8 @@ const ACCOUNT_ANALYSIS_VISIBILITY_KEY = "codex2api:accounts:analysis-visible";
 const ACCOUNT_EMAIL_DOMAIN_VISIBILITY_KEY =
   "codex2api:accounts:email-domain-tags-visible";
 const ACCOUNT_VISIBLE_COLUMNS_KEY = "codex2api:accounts:visible-columns";
+const OAUTH_SESSION_STORAGE_KEY = "codex2api:accounts:grok-oauth-session";
+const EDIT_OAUTH_SESSION_STORAGE_KEY = "codex2api:accounts:grok-edit-oauth-session";
 const ACCOUNT_TABLE_COLUMNS = [
   "sequence",
   "email",
@@ -149,6 +149,93 @@ type AccountGroupDraft = {
   auto_pause_5h_threshold: number;
   auto_pause_7d_threshold: number;
 };
+
+type OAuthSessionState = {
+  session_id: string;
+  auth_url: string;
+  state: string;
+};
+
+function readStoredOAuthSession(storageKey: string): OAuthSessionState | null {
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<OAuthSessionState>;
+    if (
+      typeof parsed.session_id === "string" && parsed.session_id.trim() &&
+      typeof parsed.auth_url === "string" && parsed.auth_url.trim() &&
+      typeof parsed.state === "string" && parsed.state.trim()
+    ) {
+      return {
+        session_id: parsed.session_id,
+        auth_url: parsed.auth_url,
+        state: parsed.state,
+      };
+    }
+  } catch {
+    // ignore sessionStorage failures
+  }
+  return null;
+}
+
+function writeStoredOAuthSession(storageKey: string, session: OAuthSessionState | null) {
+  try {
+    if (!session) {
+      window.sessionStorage.removeItem(storageKey);
+      return;
+    }
+    window.sessionStorage.setItem(storageKey, JSON.stringify(session));
+  } catch {
+    // ignore sessionStorage failures
+  }
+}
+
+function getOAuthURLParam(rawURL: string, name: string): string {
+  try {
+    return new URL(rawURL).searchParams.get(name)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeOAuthSession(response: {
+  auth_url: string;
+  session_id: string;
+  state?: string;
+}): OAuthSessionState | null {
+  const authURL = response.auth_url.trim();
+  const sessionID = response.session_id.trim();
+  const state = response.state?.trim() || getOAuthURLParam(authURL, "state");
+  if (!authURL || !sessionID || !state) return null;
+  return {
+    auth_url: authURL,
+    session_id: sessionID,
+    state,
+  };
+}
+
+function parseOAuthCodeInput(rawValue: string): { code: string; state?: string } {
+  const value = rawValue.trim();
+  if (!value) return { code: "" };
+
+  try {
+    const normalized =
+      value.startsWith("http://") || value.startsWith("https://")
+        ? new URL(value)
+        : new URL(
+            value.startsWith("?")
+              ? `https://local.invalid/${value}`
+              : `https://local.invalid/?${value}`,
+          );
+    const code = normalized.searchParams.get("code")?.trim() ?? "";
+    const state = normalized.searchParams.get("state")?.trim() ?? "";
+    if (code) return state ? { code, state } : { code };
+  } catch {
+    // fall through to treat the input as a plain authorization code
+  }
+
+  return { code: value };
+}
 
 function getDefaultAccountVisibleColumns(): Record<
   AccountTableColumn,
@@ -375,24 +462,6 @@ function formatAccountName(account: AccountRow): string {
 
 function isOAuthAccount(account: AccountRow | null): boolean {
   return account?.account_type === "oauth";
-}
-
-function parseOAuthCallbackParams(rawUrl: string): { code: string; state: string } {
-  const raw = rawUrl.trim();
-  try {
-    const url = new URL(raw);
-    return {
-      code: url.searchParams.get("code") ?? "",
-      state: url.searchParams.get("state") ?? "",
-    };
-  } catch {
-    const qs = raw.includes("?") ? raw.split("?")[1] : raw;
-    const params = new URLSearchParams(qs);
-    return {
-      code: params.get("code") ?? "",
-      state: params.get("state") ?? "",
-    };
-  }
 }
 
 function formatQuotaAutoPausePercentInput(value?: number | null): string {
@@ -669,7 +738,6 @@ export default function Accounts() {
     getInitialAnalysisVisibility,
   );
   const [showRecycleBin, setShowRecycleBin] = useState(false);
-  const [showInvite, setShowInvite] = useState(false);
   const [showEmailDomainTags, setShowEmailDomainTags] = useState(
     getInitialEmailDomainVisibility,
   );
@@ -720,9 +788,10 @@ export default function Accounts() {
   const [oauthSession, setOauthSession] = useState<{
     session_id: string;
     auth_url: string;
+    state: string;
   } | null>(null);
   const [oauthProxyUrl, setOauthProxyUrl] = useState("");
-  const [oauthCallbackUrl, setOauthCallbackUrl] = useState("");
+  const [oauthCode, setOauthCode] = useState("");
   const [oauthName, setOauthName] = useState("");
   const [oauthGenerating, setOauthGenerating] = useState(false);
   const [oauthCompleting, setOauthCompleting] = useState(false);
@@ -732,9 +801,10 @@ export default function Accounts() {
   const [editOAuthSession, setEditOAuthSession] = useState<{
     session_id: string;
     auth_url: string;
+    state: string;
   } | null>(null);
   const [editOAuthProxyUrl, setEditOAuthProxyUrl] = useState("");
-  const [editOAuthCallbackUrl, setEditOAuthCallbackUrl] = useState("");
+  const [editOAuthCode, setEditOAuthCode] = useState("");
   const [editOAuthGenerating, setEditOAuthGenerating] = useState(false);
   const [editOAuthUpdating, setEditOAuthUpdating] = useState(false);
   const [editTags, setEditTags] = useState<string[]>([]);
@@ -1766,10 +1836,16 @@ export default function Accounts() {
 
   const startOAuthSession = async () => {
     const result = await api.generateOAuthURL({ proxy_url: oauthProxyUrl });
-    setOauthSession(result);
-    setOauthCallbackUrl("");
+    const session = normalizeOAuthSession(result);
+    if (!session) {
+      writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
+      throw new Error(t("accounts.oauthStateMissing"));
+    }
+    setOauthSession(session);
+    writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, session);
+    setOauthCode("");
     setOauthStep("exchange");
-    return result;
+    return session;
   };
 
   const handleOAuthGenerate = async () => {
@@ -1789,7 +1865,8 @@ export default function Accounts() {
   const handleOAuthRestart = async () => {
     setOauthGenerating(true);
     setOauthSession(null);
-    setOauthCallbackUrl("");
+    writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
+    setOauthCode("");
     try {
       await startOAuthSession();
     } catch (error) {
@@ -1814,17 +1891,30 @@ export default function Accounts() {
   };
 
   const handleOAuthComplete = async () => {
-    if (!oauthSession) return;
-    const { code, state } = parseOAuthCallbackParams(oauthCallbackUrl);
-    if (!code || !state) {
+    const session = oauthSession ?? readStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY);
+    if (!session) {
+      showToast(t("accounts.oauthGenerateFirst"), "error");
+      return;
+    }
+    const parsed = parseOAuthCodeInput(oauthCode);
+    if (!parsed.code) {
       showToast(t("accounts.oauthParseError"), "error");
+      return;
+    }
+    const state = parsed.state || session.state;
+    if (!state) {
+      showToast(t("accounts.oauthStateMissing"), "error");
+      return;
+    }
+    if (parsed.state && parsed.state !== session.state) {
+      showToast(t("accounts.oauthStateMissing"), "error");
       return;
     }
     setOauthCompleting(true);
     try {
       const result = await api.exchangeOAuthCode({
-        session_id: oauthSession.session_id,
-        code,
+        session_id: session.session_id,
+        code: parsed.code,
         state,
         name: oauthName.trim() || undefined,
         proxy_url: oauthProxyUrl.trim() || undefined,
@@ -1838,7 +1928,8 @@ export default function Accounts() {
       setAddMethod("oauth");
       setOauthStep("generate");
       setOauthSession(null);
-      setOauthCallbackUrl("");
+      writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
+      setOauthCode("");
       setOauthName("");
       setAddCustomHeadersText("");
       void reload();
@@ -1856,10 +1947,16 @@ export default function Accounts() {
     const result = await api.generateOAuthURL({
       proxy_url: editOAuthProxyUrl.trim() || undefined,
     });
-    setEditOAuthSession(result);
-    setEditOAuthCallbackUrl("");
+    const session = normalizeOAuthSession(result);
+    if (!session) {
+      writeStoredOAuthSession(EDIT_OAUTH_SESSION_STORAGE_KEY, null);
+      throw new Error(t("accounts.oauthStateMissing"));
+    }
+    setEditOAuthSession(session);
+    writeStoredOAuthSession(EDIT_OAUTH_SESSION_STORAGE_KEY, session);
+    setEditOAuthCode("");
     setEditOAuthStep("exchange");
-    return result;
+    return session;
   };
 
   const handleEditOAuthGenerate = async () => {
@@ -1879,7 +1976,8 @@ export default function Accounts() {
   const handleEditOAuthRestart = async () => {
     setEditOAuthGenerating(true);
     setEditOAuthSession(null);
-    setEditOAuthCallbackUrl("");
+    writeStoredOAuthSession(EDIT_OAUTH_SESSION_STORAGE_KEY, null);
+    setEditOAuthCode("");
     try {
       await startEditOAuthSession();
     } catch (error) {
@@ -1905,13 +2003,24 @@ export default function Accounts() {
 
   const handleUpdateOAuthAccount = async () => {
     if (!editingAccount || !isOAuthAccount(editingAccount)) return;
-    if (!editOAuthSession) {
+    const session =
+      editOAuthSession ?? readStoredOAuthSession(EDIT_OAUTH_SESSION_STORAGE_KEY);
+    if (!session) {
       showToast(t("accounts.oauthGenerateFirst"), "error");
       return;
     }
-    const { code, state } = parseOAuthCallbackParams(editOAuthCallbackUrl);
-    if (!code || !state) {
+    const parsed = parseOAuthCodeInput(editOAuthCode);
+    if (!parsed.code) {
       showToast(t("accounts.oauthParseError"), "error");
+      return;
+    }
+    const state = parsed.state || session.state;
+    if (!state) {
+      showToast(t("accounts.oauthStateMissing"), "error");
+      return;
+    }
+    if (parsed.state && parsed.state !== session.state) {
+      showToast(t("accounts.oauthStateMissing"), "error");
       return;
     }
 
@@ -1919,8 +2028,8 @@ export default function Accounts() {
     setEditOAuthUpdating(true);
     try {
       const result = await api.updateOAuthAccount(editingAccount.id, {
-        session_id: editOAuthSession.session_id,
-        code,
+        session_id: session.session_id,
+        code: parsed.code,
         state,
         proxy_url: editOAuthProxyUrl.trim() || undefined,
       });
@@ -2965,7 +3074,7 @@ export default function Accounts() {
     setEditOAuthStep("generate");
     setEditOAuthSession(null);
     setEditOAuthProxyUrl(account.proxy_url ?? "");
-    setEditOAuthCallbackUrl("");
+    setEditOAuthCode("");
     setEditOAuthGenerating(false);
     setEditOAuthUpdating(false);
   };
@@ -2999,8 +3108,9 @@ export default function Accounts() {
     setEditOpenAIModelDraft("");
     setEditOAuthStep("generate");
     setEditOAuthSession(null);
+    writeStoredOAuthSession(EDIT_OAUTH_SESSION_STORAGE_KEY, null);
     setEditOAuthProxyUrl("");
-    setEditOAuthCallbackUrl("");
+    setEditOAuthCode("");
     setEditOAuthGenerating(false);
     setEditOAuthUpdating(false);
   };
@@ -3289,13 +3399,7 @@ export default function Accounts() {
               runStreamingOperation={runStreamingAccountOperation}
             />
           ) : null}
-          {showInvite ? (
-            <CodexInviteView
-              accounts={accounts}
-              onClose={() => setShowInvite(false)}
-            />
-          ) : null}
-          <div className={showRecycleBin || showInvite ? "hidden" : "contents"}>
+          <div className={showRecycleBin ? "hidden" : "contents"}>
           <PageHeader
             title={t("accounts.title")}
             description={t("accounts.description")}
@@ -3457,14 +3561,6 @@ export default function Accounts() {
                 >
                   <Recycle className="size-3.5" />
                   {t("accounts.recycleBin")}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowInvite(true)}
-                  className="max-sm:w-full"
-                >
-                  <Mail className="size-3.5" />
-                  {t("invite.entry")}
                 </Button>
                 <Button onClick={() => setShowAdd(true)}>
                   <Plus className="size-3.5" />
@@ -4604,7 +4700,7 @@ export default function Accounts() {
               setAddMethod("oauth");
               setOauthStep("generate");
               setOauthSession(null);
-              setOauthCallbackUrl("");
+              writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
               setOauthName("");
               setOpenAIForm({
                 base_url: "https://api.openai.com",
@@ -4641,7 +4737,7 @@ export default function Accounts() {
                     setAddMethod("oauth");
                     setOauthStep("generate");
                     setOauthSession(null);
-                    setOauthCallbackUrl("");
+                    writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
                     setOauthName("");
                     setOpenAIForm({
                       base_url: "https://api.openai.com",
@@ -4678,24 +4774,6 @@ export default function Accounts() {
                   >
                     {submitting ? t("accounts.adding") : t("accounts.submit")}
                   </Button>
-                ) : addMethod === "session" ? (
-                  <Button
-                    onClick={() => void handleAddSession()}
-                    disabled={importing || submitting || !sessionJson.trim()}
-                  >
-                    {submitting ? t("accounts.adding") : t("accounts.submit")}
-                  </Button>
-                ) : addMethod === "openai" ? (
-                  <Button
-                    onClick={() => void handleAddOpenAIResponses()}
-                    disabled={
-                      submitting ||
-                      !openAIForm.api_key.trim() ||
-                      openAIForm.models.length === 0
-                    }
-                  >
-                    {submitting ? t("accounts.adding") : t("accounts.submit")}
-                  </Button>
                 ) : oauthStep === "generate" ? (
                   <Button
                     onClick={() => void handleOAuthGenerate()}
@@ -4708,7 +4786,7 @@ export default function Accounts() {
                 ) : (
                   <Button
                     onClick={() => void handleOAuthComplete()}
-                    disabled={oauthCompleting || !oauthCallbackUrl.trim()}
+                    disabled={oauthCompleting || !oauthCode.trim()}
                   >
                     {oauthCompleting
                       ? t("accounts.oauthCompleting")
@@ -4719,13 +4797,13 @@ export default function Accounts() {
             }
           >
             {/* Tab switcher */}
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
               <button
                 onClick={() => {
                   setAddMethod("oauth");
                   setOauthStep("generate");
                   setOauthSession(null);
-                  setOauthCallbackUrl("");
+                  writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
                 }}
                 className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
                   addMethod === "oauth"
@@ -4768,28 +4846,6 @@ export default function Accounts() {
               >
                 <Fingerprint className="size-3.5" />
                 {t("accounts.addMethodAT")}
-              </button>
-              <button
-                onClick={() => setAddMethod("session")}
-                className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
-                  addMethod === "session"
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <ExternalLink className="size-3.5" />
-                {t("accounts.addMethodSession")}
-              </button>
-              <button
-                onClick={() => setAddMethod("openai")}
-                className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
-                  addMethod === "openai"
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <KeyRound className="size-3.5" />
-                {t("accounts.addMethodOpenAI")}
               </button>
             </div>
 
@@ -5127,17 +5183,17 @@ export default function Accounts() {
                     )}
                     <div>
                       <label className="block mb-2 text-sm font-semibold text-muted-foreground">
-                        {t("accounts.oauthCallbackUrlLabel")}
+                        {t("accounts.oauthCodeLabel")}
                       </label>
                       <Input
-                        placeholder={t("accounts.oauthCallbackUrlPlaceholder")}
-                        value={oauthCallbackUrl}
+                        placeholder={t("accounts.oauthCodePlaceholder")}
+                        value={oauthCode}
                         onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setOauthCallbackUrl(e.target.value)
+                          setOauthCode(e.target.value)
                         }
                       />
                       <p className="mt-1.5 text-xs text-muted-foreground">
-                        {t("accounts.oauthCallbackUrlHint")}
+                        {t("accounts.oauthCodeHint")}
                       </p>
                     </div>
                     <button
@@ -5579,8 +5635,7 @@ export default function Accounts() {
                     disabled={
                       editOAuthGenerating ||
                       editOAuthUpdating ||
-                      (editOAuthStep === "exchange" &&
-                        !editOAuthCallbackUrl.trim())
+                      (editOAuthStep === "exchange" && !editOAuthCode.trim())
                     }
                   >
                     {editOAuthStep === "generate"
@@ -5851,17 +5906,17 @@ export default function Accounts() {
                         )}
                         <div>
                           <label className="block mb-2 text-sm font-semibold text-muted-foreground">
-                            {t("accounts.oauthCallbackUrlLabel")}
+                            {t("accounts.oauthCodeLabel")}
                           </label>
                           <Input
-                            placeholder={t("accounts.oauthCallbackUrlPlaceholder")}
-                            value={editOAuthCallbackUrl}
+                            placeholder={t("accounts.oauthCodePlaceholder")}
+                            value={editOAuthCode}
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                              setEditOAuthCallbackUrl(event.target.value)
+                              setEditOAuthCode(event.target.value)
                             }
                           />
                           <p className="mt-1.5 text-xs text-muted-foreground">
-                            {t("accounts.oauthCallbackUrlHint")}
+                            {t("accounts.oauthCodeHint")}
                           </p>
                         </div>
                         <button
@@ -9609,7 +9664,17 @@ function formatTestOutput(text: string) {
   }
 }
 
-const DEFAULT_TEST_MODEL = "gpt-5.4";
+const DEFAULT_TEST_MODEL = "grok-4.3";
+
+const GROK_TEST_MODELS = [
+  "grok",
+  "grok-latest",
+  DEFAULT_TEST_MODEL,
+  "grok-build-0.1",
+  "grok-4.20-0309-reasoning",
+  "grok-4.20-0309-non-reasoning",
+  "grok-4.20-multi-agent-0309",
+];
 
 function isConnectionTestModel(model: string) {
   const value = model.trim().toLowerCase();
@@ -9642,7 +9707,7 @@ function uniqueTestModels(
   const candidates = [
     preferredModel ?? "",
     ...models,
-    ...(includeDefault ? [DEFAULT_TEST_MODEL] : []),
+    ...(includeDefault ? GROK_TEST_MODELS : []),
   ];
 
   for (const model of candidates) {

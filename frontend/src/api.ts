@@ -26,8 +26,9 @@ import type {
   MessageResponse,
   ModelSyncResponse,
   ModelsResponse,
-  OAuthExchangeResponse,
-  OAuthURLResponse,
+  GrokOAuthExchangeResponse,
+  GrokOAuthURLResponse,
+  UpdateGrokOAuthAccountRequest,
   OpsErrorSummary,
   OpsOverviewResponse,
   PromptFilterLog,
@@ -47,7 +48,6 @@ import type {
   SystemSettings,
   UpdateAccountSchedulerRequest,
   UpdateAPIKeyRequest,
-  UpdateOAuthAccountRequest,
   UpdateOpenAIResponsesAccountRequest,
   UsageLogsResponse,
   UsageLogsPagedResponse,
@@ -557,11 +557,11 @@ export const api = {
     request<ProxyTestResult>('/proxies/test', { method: 'POST', body: JSON.stringify({ url, id, lang }) }),
   // OAuth
   generateOAuthURL: (data: { proxy_url?: string; redirect_uri?: string }) =>
-    request<OAuthURLResponse>('/oauth/generate-auth-url', { method: 'POST', body: JSON.stringify(data) }),
+    request<GrokOAuthURLResponse>('/oauth/generate-auth-url', { method: 'POST', body: JSON.stringify(data) }),
   exchangeOAuthCode: (data: { session_id: string; code: string; state: string; name?: string; proxy_url?: string }) =>
-    request<OAuthExchangeResponse>('/oauth/exchange-code', { method: 'POST', body: JSON.stringify(data) }),
-  updateOAuthAccount: (id: number, data: UpdateOAuthAccountRequest) =>
-    request<OAuthExchangeResponse>(`/accounts/${id}/oauth/exchange-code`, { method: 'POST', body: JSON.stringify(data) }),
+    request<GrokOAuthExchangeResponse>('/oauth/exchange-code', { method: 'POST', body: JSON.stringify(data) }),
+  updateOAuthAccount: (id: number, data: UpdateGrokOAuthAccountRequest) =>
+    request<GrokOAuthExchangeResponse>(`/accounts/${id}/oauth/exchange-code`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
 export interface ProxyRow {

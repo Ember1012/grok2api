@@ -21,55 +21,54 @@ func newTestModelRegistryDB(t *testing.T) *database.DB {
 	return db
 }
 
-func TestParseOfficialCodexModelIDs(t *testing.T) {
+func TestParseOfficialGrokModelIDs(t *testing.T) {
 	html := `
-		<astro-island props="{&quot;name&quot;:[0,&quot;gpt-5.5&quot;]}"></astro-island>
-		<code>codex -m gpt-5.4</code>
-		<code>codex -m gpt-5.3-codex-spark</code>
-		<code>codex -m gpt-5.2</code>
-		<code>codex -m gpt-5.2-codex</code>
-		<code>codex -m gpt-4.1</code>
+		<code>grok-4.3</code>
+		<code>grok-build-0.1</code>
+		<code>grok-4.20-0309-reasoning</code>
+		<code>gpt-5.5</code>
 	`
-	models, skipped := ParseOfficialCodexModelIDs(html)
-	for _, model := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.2"} {
+	models, skipped := ParseOfficialGrokModelIDs(html)
+	for _, model := range []string{"grok-4.3", "grok-build-0.1", "grok-4.20-0309-reasoning"} {
 		if !slices.Contains(models, model) {
 			t.Fatalf("parsed models missing %q in %v", model, models)
 		}
 	}
-	for _, model := range []string{"gpt-5.2-codex", "gpt-4.1"} {
-		if !slices.Contains(skipped, model) {
-			t.Fatalf("skipped models missing %q in %v", model, skipped)
-		}
+	if slices.Contains(models, "gpt-5.5") {
+		t.Fatalf("parsed models should not include legacy OpenAI model: %v", models)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want empty", skipped)
 	}
 }
 
-func TestApplyOfficialCodexModelSyncMergesWithBuiltinImageModel(t *testing.T) {
+func TestApplyOfficialGrokModelSyncMergesWithBuiltinImageModel(t *testing.T) {
 	db := newTestModelRegistryDB(t)
 	ctx := context.Background()
-	html := `gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.3-codex gpt-5.3-codex-spark gpt-5.2 gpt-5.2-codex gpt-4.1`
+	html := `grok-4.3 grok-build-0.1 grok-4.20-0309-reasoning grok-2-image gpt-5.5`
 
-	result, err := ApplyOfficialCodexModelSync(ctx, db, html, time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
+	result, err := ApplyOfficialGrokModelSync(ctx, db, html, time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
 	if err != nil {
-		t.Fatalf("ApplyOfficialCodexModelSync error: %v", err)
+		t.Fatalf("ApplyOfficialGrokModelSync error: %v", err)
 	}
-	for _, model := range []string{"gpt-image-2", "gpt-image-2-2k", "gpt-image-2-4k"} {
+	for _, model := range []string{"grok", "grok-latest", "grok-4.3", "grok-2-image"} {
 		if !slices.Contains(result.Models, model) {
-			t.Fatalf("sync should keep builtin image model %q, got %v", model, result.Models)
+			t.Fatalf("sync should keep builtin Grok model %q, got %v", model, result.Models)
 		}
 	}
-	if !slices.Contains(result.Skipped, "gpt-5.2-codex") {
-		t.Fatalf("sync should skip gpt-5.2-codex, got %v", result.Skipped)
+	if slices.Contains(result.Models, "gpt-5.5") {
+		t.Fatalf("sync should not import legacy OpenAI models, got %v", result.Models)
 	}
 
-	var spark *ModelInfo
+	var image *ModelInfo
 	for i := range result.Items {
-		if result.Items[i].ID == "gpt-5.3-codex-spark" {
-			spark = &result.Items[i]
+		if result.Items[i].ID == "grok-2-image" {
+			image = &result.Items[i]
 			break
 		}
 	}
-	if spark == nil || !spark.ProOnly {
-		t.Fatalf("spark model should be marked pro_only, got %#v", spark)
+	if image == nil || image.Category != ModelCategoryImage {
+		t.Fatalf("image model should be marked image category, got %#v", image)
 	}
 }
 
@@ -78,10 +77,10 @@ func TestDynamicModelRegistryAffectsValidationImmediately(t *testing.T) {
 	ctx := context.Background()
 	err := db.UpsertModelRegistryRows(ctx, []database.ModelRegistryRow{
 		{
-			ID:                  "gpt-6.0",
+			ID:                  "grok-custom-1",
 			Enabled:             true,
-			Category:            ModelCategoryCodex,
-			Source:              ModelSourceOfficialCodexDocs,
+			Category:            ModelCategoryText,
+			Source:              ModelSourceOfficialGrokDocs,
 			APIKeyAuthAvailable: true,
 		},
 	})
@@ -91,11 +90,11 @@ func TestDynamicModelRegistryAffectsValidationImmediately(t *testing.T) {
 
 	handler := NewHandler(nil, db, nil, nil)
 	models := handler.supportedModelIDs(ctx)
-	if !slices.Contains(models, "gpt-6.0") {
+	if !slices.Contains(models, "grok-custom-1") {
 		t.Fatalf("runtime supported models missing synced model: %v", models)
 	}
 
-	result := api.ValidateResponsesAPIRequest([]byte(`{"model":"gpt-6.0","input":"hello"}`), models)
+	result := api.ValidateResponsesAPIRequest([]byte(`{"model":"grok-custom-1","input":"hello"}`), models)
 	if !result.Valid {
 		t.Fatalf("synced model should pass validation: %#v", result.Errors)
 	}
@@ -112,7 +111,7 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 		settings = &database.SystemSettings{
 			SiteName:                         "CodexProxy",
 			MaxConcurrency:                   2,
-			TestModel:                        "gpt-5.4",
+			TestModel:                        "grok-4.3",
 			TestConcurrency:                  50,
 			BackgroundRefreshIntervalMinutes: 2,
 			UsageProbeMaxAgeMinutes:          10,
@@ -145,7 +144,7 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 			BackgroundConfig:                 "{}",
 		}
 	}
-	settings.ReasoningEffortModels = `[{"model":"gpt-5.5","effort":"xhigh"}]`
+	settings.ReasoningEffortModels = `[{"model":"grok-4.3","effort":"xhigh"}]`
 	if err := db.UpdateSystemSettings(ctx, settings); err != nil {
 		t.Fatalf("UpdateSystemSettings error: %v", err)
 	}
@@ -154,13 +153,13 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModelCatalog error: %v", err)
 	}
-	if !slices.Contains(catalog.Models, "gpt-5.5(xhigh)") {
+	if !slices.Contains(catalog.Models, "grok-4.3(xhigh)") {
 		t.Fatalf("catalog models missing reasoning alias: %v", catalog.Models)
 	}
 
 	var aliasInfo *ModelInfo
 	for i := range catalog.Items {
-		if catalog.Items[i].ID == "gpt-5.5(xhigh)" {
+		if catalog.Items[i].ID == "grok-4.3(xhigh)" {
 			aliasInfo = &catalog.Items[i]
 			break
 		}
@@ -171,10 +170,10 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 	if aliasInfo.Source != ModelSourceReasoningEffort {
 		t.Fatalf("alias source = %q, want %q", aliasInfo.Source, ModelSourceReasoningEffort)
 	}
-	if aliasInfo.Category != ModelCategoryCodex {
-		t.Fatalf("alias category = %q, want %q", aliasInfo.Category, ModelCategoryCodex)
+	if aliasInfo.Category != ModelCategoryText {
+		t.Fatalf("alias category = %q, want %q", aliasInfo.Category, ModelCategoryText)
 	}
-	if slices.Contains(TextTestModelIDs(ctx, db), "gpt-5.5(xhigh)") {
+	if slices.Contains(TextTestModelIDs(ctx, db), "grok-4.3(xhigh)") {
 		t.Fatalf("reasoning alias should not be used for direct connection tests")
 	}
 }
