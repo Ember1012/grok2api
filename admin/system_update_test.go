@@ -74,7 +74,7 @@ func TestCompareSystemVersions(t *testing.T) {
 
 func TestValidateSystemUpdateURL(t *testing.T) {
 	allowed := []string{
-		"https://github.com/james-6-23/codex2api/releases/download/v1/codex2api.tar.gz",
+		"https://github.com/Ember1012/grok2api/releases/download/v1/codex2api.tar.gz",
 		"https://release-assets.githubusercontent.com/github-production-release-asset/file",
 		"https://objects.githubusercontent.com/github-production-release-asset/file",
 	}
@@ -85,7 +85,7 @@ func TestValidateSystemUpdateURL(t *testing.T) {
 	}
 
 	blocked := []string{
-		"http://github.com/james-6-23/codex2api/releases/download/v1/codex2api.tar.gz",
+		"http://github.com/Ember1012/grok2api/releases/download/v1/codex2api.tar.gz",
 		"https://example.com/codex2api.tar.gz",
 	}
 	for _, rawURL := range blocked {
@@ -97,8 +97,8 @@ func TestValidateSystemUpdateURL(t *testing.T) {
 
 func TestSystemUpdaterCheckFindsMatchingAsset(t *testing.T) {
 	client := &fakeSystemReleaseClient{release: &systemGitHubRelease{
-		TagName: "v2.4.4",
-		HTMLURL: "https://github.com/james-6-23/codex2api/releases/tag/v2.4.4",
+		TagName: "v1.0.0",
+		HTMLURL: "https://github.com/Ember1012/grok2api/releases/tag/v1.0.0",
 		Assets: []systemGitHubAsset{
 			{Name: "codex2api_2.4.4_linux_arm64.tar.gz", BrowserDownloadURL: "https://github.com/arm64"},
 			{Name: "codex2api_2.4.4_linux_amd64.tar.gz", BrowserDownloadURL: "https://github.com/amd64"},
@@ -267,12 +267,12 @@ func TestSystemUpdaterPerformUpdateReplacesBinaryAndKeepsBackup(t *testing.T) {
 
 	archive := buildSystemUpdateTarball(t, "codex2api", []byte("new-binary"))
 	archiveHash := sha256.Sum256(archive)
-	archiveURL := "https://github.com/james-6-23/codex2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
+	archiveURL := "https://github.com/Ember1012/grok2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
 	restarted := make(chan struct{}, 1)
 	client := &fakeSystemReleaseClient{
 		release: &systemGitHubRelease{
 			TagName: "v2.4.4",
-			HTMLURL: "https://github.com/james-6-23/codex2api/releases/tag/v2.4.4",
+			HTMLURL: "https://github.com/Ember1012/grok2api/releases/tag/v2.4.4",
 			Assets: []systemGitHubAsset{{
 				Name:               "codex2api_2.4.4_linux_amd64.tar.gz",
 				BrowserDownloadURL: archiveURL,
@@ -322,7 +322,7 @@ func TestSystemUpdaterPerformUpdateRejectsChecksumMismatch(t *testing.T) {
 	}
 
 	archive := buildSystemUpdateTarball(t, "codex2api", []byte("new-binary"))
-	archiveURL := "https://github.com/james-6-23/codex2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
+	archiveURL := "https://github.com/Ember1012/grok2api/releases/download/v2.4.4/codex2api_2.4.4_linux_amd64.tar.gz"
 	client := &fakeSystemReleaseClient{
 		release: &systemGitHubRelease{
 			TagName: "v2.4.4",

@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	systemUpdateRepo             = "james-6-23/codex2api"
+	systemUpdateRepo             = "Ember1012/grok2api"
 	systemUpdateUserAgent        = "Codex2API-Updater"
 	systemUpdateMaxDownloadBytes = 200 * 1024 * 1024
 	systemUpdateRestartDelay     = 900 * time.Millisecond

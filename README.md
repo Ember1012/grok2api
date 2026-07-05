@@ -129,8 +129,8 @@ Run it as a full **PostgreSQL + Redis** production stack or as a single-containe
 Standard image mode:
 
 ```bash
-git clone https://github.com/james-6-23/codex2api.git
-cd codex2api
+git clone https://github.com/Ember1012/grok2api.git
+cd grok2api
 cp .env.example .env
 docker compose pull
 docker compose up -d
