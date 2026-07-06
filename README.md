@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
 </p>
 
-**Turn a Codex account pool into an observable, schedulable, operations-ready OpenAI / Anthropic compatible gateway.** Codex2API is not a thin forwarding proxy. It is a long-running Codex access hub: it exposes `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, Images, and Models endpoints while managing Refresh Token / Access Token accounts, health scoring, dynamic concurrency, rate-limit recovery, usage tracking, and admin operations behind the scenes.
+**Turn a Grok account pool into an observable, schedulable, operations-ready API gateway.** GrokProxy is not a thin forwarding proxy. It is a long-running Grok access hub: it exposes `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, Images, and Models endpoints while managing OAuth / Refresh Token / Access Token accounts, health scoring, dynamic concurrency, rate-limit recovery, usage tracking, and admin operations behind the scenes.
 
 Run it as a full **PostgreSQL + Redis** production stack or as a single-container **SQLite + in-memory cache** deployment. Point Codex CLI, Claude Code, the OpenAI SDK, or any compatible client at one Base URL, then manage accounts, proxies, API keys, prompt filtering, image workflows, and runtime settings from the built-in dashboard.
 
@@ -44,7 +44,7 @@ Run it as a full **PostgreSQL + Redis** production stack or as a single-containe
 
 > Screenshots use demo data. The actual dashboard depends on your account pool, request logs, and runtime environment.
 
-![CodexProxy Dashboard](docs/screenshots/dashboard.png)
+![GrokProxy Dashboard](docs/screenshots/dashboard.png)
 
 <details>
 <summary>More admin dashboard screenshots</summary>

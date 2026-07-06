@@ -723,7 +723,7 @@ func (db *DB) migrate(ctx context.Context) error {
 
 			CREATE TABLE IF NOT EXISTS system_settings (
 				id                 INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-				site_name          TEXT DEFAULT 'CodexProxy',
+				site_name          TEXT DEFAULT 'GrokProxy',
 				site_logo          TEXT DEFAULT '',
 				background_config  TEXT DEFAULT '{}',
 				max_concurrency    INT DEFAULT 2,
@@ -752,7 +752,7 @@ func (db *DB) migrate(ctx context.Context) error {
 		PRIMARY KEY (account_id, model)
 	);
 	CREATE INDEX IF NOT EXISTS idx_account_model_cooldowns_reset_at ON account_model_cooldowns(reset_at);
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_name TEXT DEFAULT 'CodexProxy';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_name TEXT DEFAULT 'GrokProxy';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_logo TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS background_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS test_content TEXT DEFAULT 'hi';
@@ -1348,11 +1348,11 @@ func (db *DB) ResetAPIKeyQuota(ctx context.Context, id int64) error {
 
 // ==================== System Settings ====================
 
-const DefaultSiteName = "CodexProxy"
+const DefaultSiteName = "GrokProxy"
 
 func NormalizeSiteName(value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" {
+	if value == "" || value == "CodexProxy" {
 		return DefaultSiteName
 	}
 	runes := []rune(value)
@@ -1499,7 +1499,7 @@ func normalizeSmartPacingWindowsDB(raw string) string {
 func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	s := &SystemSettings{}
 	err := db.conn.QueryRowContext(ctx, `
-		SELECT COALESCE(site_name, 'CodexProxy'), COALESCE(site_logo, ''),
+		SELECT COALESCE(site_name, 'GrokProxy'), COALESCE(site_logo, ''),
 		       max_concurrency, global_rpm, test_model, COALESCE(test_content, 'hi'), test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 		       auto_clean_unauthorized, auto_clean_rate_limited, COALESCE(admin_secret, ''), COALESCE(auto_clean_full_usage, false),
 		       COALESCE(proxy_pool_enabled, false),

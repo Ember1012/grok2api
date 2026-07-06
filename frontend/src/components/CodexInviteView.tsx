@@ -130,12 +130,12 @@ function resolveAccountInput(accounts: AccountRow[], input: string): AccountRow 
   }) ?? null
 }
 
-// CodexInviteView 是账号管理页内的「Codex 邀请」视图，入口与回收站一致。
+// CodexInviteView 是账号管理页内的「Grok 邀请」视图，入口与回收站一致。
 export default function CodexInviteView({ accounts, onClose }: Props) {
   const { t } = useTranslation()
   const { showToast } = useToast()
 
-  // 仅保留可用于 referral 的 Codex OAuth 账号；中转 / AT-only / 失效账号不能发送邀请。
+  // 仅保留可用于 referral 的 Grok OAuth 账号；中转 / AT-only / 失效账号不能发送邀请。
   const codexAccounts = useMemo(
     () => accounts.filter(isCodexInviteCandidate),
     [accounts],

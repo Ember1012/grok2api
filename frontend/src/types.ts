@@ -23,6 +23,25 @@ export interface AccountUsageWindow {
   user_billed?: number
 }
 
+export interface GrokUsageSnapshot {
+  source: 'grok_build_billing' | 'header_observer' | string
+  state: 'observed' | 'unavailable' | 'unauthorized' | 'forbidden' | 'rate_limited' | 'decode_failed' | 'billing_unavailable' | string
+  period?: string
+  used_percent?: number
+  api_used_percent?: number
+  window?: {
+    start_at?: ISODateString
+    reset_at?: ISODateString
+  }
+  subscription_tier?: string
+  entitlement_status?: string
+  upstream_status_code?: number
+  upstream_request_id?: string
+  fetched_at?: ISODateString
+  error_code?: string
+  error?: string
+}
+
 export interface AccountRow {
   id: number
   name: string
@@ -73,6 +92,7 @@ export interface AccountRow {
   created_at: ISODateString
   updated_at: ISODateString
   codex_usage_updated_at?: ISODateString
+  grok_usage_snapshot?: GrokUsageSnapshot
   active_requests?: number
   total_requests?: number
   last_used_at?: ISODateString

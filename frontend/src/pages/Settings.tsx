@@ -783,7 +783,7 @@ export default function Settings() {
     }
   }, [])
   const [settingsForm, setSettingsForm] = useState<SystemSettings>({
-    site_name: 'CodexProxy',
+    site_name: 'GrokProxy',
     site_logo: '',
     background_image: '',
     background_opacity: 18,
@@ -2021,14 +2021,14 @@ export default function Settings() {
                   <Input
                     value={settingsForm.site_name}
                     maxLength={80}
-                    placeholder="CodexProxy"
+                    placeholder="GrokProxy"
                     onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, site_name: e.target.value }))}
                   />
                 </SettingField>
                 <SettingField label={t('settings.siteLogo')} description={t('settings.siteLogoDesc')}>
                   <div className="flex items-start gap-3">
                     <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-                      <img src={siteLogoPreview} alt={settingsForm.site_name || 'CodexProxy'} className="size-full object-cover" />
+                      <img src={siteLogoPreview} alt={settingsForm.site_name || 'GrokProxy'} className="size-full object-cover" />
                     </div>
                     <div className="min-w-0 flex-1 space-y-2">
                       <Input

@@ -109,7 +109,7 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 	}
 	if settings == nil {
 		settings = &database.SystemSettings{
-			SiteName:                         "CodexProxy",
+			SiteName:                         "GrokProxy",
 			MaxConcurrency:                   2,
 			TestModel:                        "grok-4.3",
 			TestConcurrency:                  50,

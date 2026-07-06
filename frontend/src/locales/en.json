@@ -186,7 +186,7 @@
   },
   "accounts": {
     "title": "Accounts",
-    "description": "Manage Codex proxy accounts (Refresh Tokens)",
+    "description": "Manage Grok accounts (OAuth / Refresh Tokens)",
     "loadingTitle": "Loading Accounts",
     "loadingDesc": "Syncing the account pool and live status.",
     "errorTitle": "Failed to load accounts",
@@ -394,8 +394,8 @@
     "accountBilledLabel": "Account",
     "userBilledLabel": "User",
     "quotaDistributionTitle": "Quota Distribution",
-    "quotaDistributionDesc": "Used quota distribution for non-banned Codex accounts. Sampled {{sampled}} / {{total}} accounts.",
-    "quotaDistributionEmpty": "No non-banned Codex accounts available.",
+    "quotaDistributionDesc": "Used quota distribution for non-banned Grok accounts. Sampled {{sampled}} / {{total}} accounts.",
+    "quotaDistributionEmpty": "No non-banned Grok accounts available.",
     "quotaDistributionNoSample": "No sampled quota data yet.",
     "quotaDistributionAccountCount": "Accounts",
     "quotaDistributionBucketPercent": "Bucket %",
@@ -868,9 +868,9 @@
     "billed": "Cost"
   },
   "invite": {
-    "entry": "Codex Invite",
-    "title": "Codex Invite",
-    "description": "Send referral invites using a managed Codex account",
+    "entry": "Grok Invite",
+    "title": "Grok Invite",
+    "description": "Send referral invites using a managed Grok account",
     "back": "Back to accounts",
     "accountLabel": "Select account",
     "accountPlaceholder": "Search by email, name, or account ID",
@@ -887,7 +887,7 @@
     "noAccountMatches": "No matching accounts",
     "planLabel": "Plan",
     "statusLabel": "Status",
-    "noCodexAccounts": "No Codex accounts available for invites",
+    "noCodexAccounts": "No Grok accounts available for invites",
     "noAccountSelected": "Please select an account",
     "emailsLabel": "Invite emails",
     "emailsPlaceholder": "One email per line, or separated by comma/space",
@@ -1999,11 +1999,11 @@
   },
   "guide": {
     "title": "Usage Guide",
-    "description": "Learn how to configure and call CodexProxy API endpoints",
+    "description": "Learn how to configure and call GrokProxy API endpoints",
     "copy": "Copy",
     "copied": "Copied",
     "endpoints": "API Endpoints",
-    "endpointsDesc": "CodexProxy provides three API endpoints compatible with different client formats.",
+    "endpointsDesc": "GrokProxy provides three API endpoints compatible with different client formats.",
     "responsesTitle": "POST /v1/responses",
     "responsesDesc": "Native Codex Responses API endpoint. Directly proxies requests to upstream. For Codex CLI, OpenAI SDK and other native clients.",
     "chatTitle": "POST /v1/chat/completions",
@@ -2197,7 +2197,7 @@
   },
   "apiRef": {
     "title": "API Reference",
-    "description": "CodexProxy API endpoint reference documentation with request formats and response examples",
+    "description": "GrokProxy API endpoint reference documentation with request formats and response examples",
     "authSection": "Authentication",
     "authDesc": "All API requests require a key passed via one of the following methods:",
     "responses": {
@@ -2221,7 +2221,7 @@
       "desc": "Check service status and available account count. This endpoint does not require authentication."
     },
     "accountSection": "Account Management",
-    "accountSectionDesc": "The following endpoints are for managing Codex accounts. Requires X-Admin-Key header with admin secret.",
+    "accountSectionDesc": "The following endpoints are for managing Grok accounts. Requires X-Admin-Key header with admin secret.",
     "addAccount": {
       "title": "Add Account (Refresh Token)",
       "desc": "Add a single account via Refresh Token. Automatically refreshes Access Token and joins the account pool. name is optional, proxy_url can be empty."

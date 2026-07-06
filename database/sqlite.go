@@ -179,7 +179,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS system_settings (
 					id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-					site_name TEXT DEFAULT 'CodexProxy',
+					site_name TEXT DEFAULT 'GrokProxy',
 					site_logo TEXT DEFAULT '',
 					background_config TEXT DEFAULT '{}',
 					max_concurrency INTEGER DEFAULT 2,
@@ -396,7 +396,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"account_groups", "sort_order", "INTEGER DEFAULT 0"},
 		{"account_groups", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"},
 		{"account_groups", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"},
-		{"system_settings", "site_name", "TEXT DEFAULT 'CodexProxy'"},
+		{"system_settings", "site_name", "TEXT DEFAULT 'GrokProxy'"},
 		{"system_settings", "site_logo", "TEXT DEFAULT ''"},
 		{"system_settings", "background_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "test_content", "TEXT DEFAULT 'hi'"},

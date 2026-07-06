@@ -1623,7 +1623,7 @@ curl -X DELETE http://localhost:8080/api/admin/images/jobs/1 \
 
 ### OAuth 授权
 
-通过 OAuth PKCE 流程授权获取 Codex 账号的 Refresh Token，适用于无法手动获取 RT 的场景。
+通过 OAuth PKCE 流程授权获取 Grok 账号的 Refresh Token，适用于无法手动获取 RT 的场景。
 
 **流程:** 生成授权 URL → 用户在浏览器中完成授权 → 用授权码兑换 Token 并写入系统
 

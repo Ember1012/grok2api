@@ -656,7 +656,7 @@ function ResetCreditsSection({
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
-  // 次数未知（非 Codex 账号或尚未探测）时不显示该区块。
+  // 次数未知（非 Grok 账号或尚未探测）时不显示该区块。
   if (count === null) return null
 
   const handleReset = async () => {

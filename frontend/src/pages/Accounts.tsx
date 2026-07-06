@@ -10273,8 +10273,27 @@ function UsageCell({
 
   const fiveHourPresent = has5h || has5hDetail || has5hReset;
   const sevenDayPresent = has7d || has7dDetail || has7dReset;
-  // plan 表明是订阅型时,即使数据暂未拉到也按订阅布局占位,避免抖动
-  const planSuggestsPremium = isPremiumUsagePlan(plan);
+  const grokState = account.grok_usage_snapshot?.state;
+  if (account.grok_usage_snapshot && !sevenDayPresent) {
+    const label =
+      grokState === "rate_limited"
+        ? "rate limited"
+        : grokState === "unauthorized"
+          ? "reauth required"
+          : grokState === "forbidden"
+            ? "forbidden"
+            : "unknown";
+    return (
+      <div className={`${wide ? "w-full" : "w-48"} flex items-center gap-1`}>
+        <span className="flex-1 text-[12px] text-muted-foreground">
+          Grok {label}
+        </span>
+        {refreshButton}
+      </div>
+    );
+  }
+  // plan 表明是订阅型时,即使数据暂未拉到也按订阅布局占位,避免抖动；Grok 官方只有 weekly 用量，不伪造 5h。
+  const planSuggestsPremium = isPremiumUsagePlan(plan) && !account.grok_usage_snapshot;
   const showFiveHour = fiveHourPresent || planSuggestsPremium;
 
   if (showFiveHour) {

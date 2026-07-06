@@ -32,6 +32,7 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/grokquota"
 	"github.com/codex2api/internal/imagestore"
 	"github.com/codex2api/proxy"
 	"github.com/codex2api/security"
@@ -662,6 +663,7 @@ type accountResponse struct {
 	UpdatedAt                string                     `json:"updated_at"`
 	CodexUsageUpdatedAt      string                     `json:"codex_usage_updated_at,omitempty"`
 	Codex5HUsageUpdatedAt    string                     `json:"codex_5h_usage_updated_at,omitempty"`
+	GrokUsageSnapshot        *grokquota.UsageSnapshot   `json:"grok_usage_snapshot,omitempty"`
 	ActiveRequests           int64                      `json:"active_requests"`
 	TotalRequests            int64                      `json:"total_requests"`
 	LastUsedAt               string                     `json:"last_used_at"`
@@ -746,6 +748,35 @@ func accountAccessTokenType(row *database.AccountRow) string {
 		return tokenType
 	}
 	return accessTokenTypeForToken(row.GetCredential("access_token"))
+}
+
+func applyGrokUsageSnapshotToQuotaFields(resp *accountResponse, snapshot *grokquota.UsageSnapshot) {
+	if resp == nil || snapshot == nil || snapshot.State != grokquota.StateObserved {
+		return
+	}
+	if snapshot.Source != grokquota.SourceGrokBuildBilling {
+		return
+	}
+	var pct *float64
+	if snapshot.UsedPercent != nil {
+		pct = snapshot.UsedPercent
+	} else if snapshot.APIUsedPercent != nil {
+		pct = snapshot.APIUsedPercent
+	}
+	if pct == nil {
+		return
+	}
+	weeklySeconds := int64(7 * 24 * 60 * 60)
+	resp.UsagePercent7d = pct
+	resp.Reset7dAt = ""
+	resp.Window7dKind = "weekly"
+	resp.Window7dSeconds = &weeklySeconds
+	resp.UsagePercent5h = nil
+	resp.Reset5hAt = ""
+	resp.Usage5hDetail = nil
+	if snapshot.Window != nil {
+		resp.Reset7dAt = snapshot.Window.ResetAt
+	}
 }
 
 type schedulerBreakdownResponse struct {
@@ -835,6 +866,9 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		}
 		resp.AutoPause5hThreshold = accountQuotaAutoPauseThreshold(row, "auto_pause_5h_threshold")
 		resp.AutoPause7dThreshold = accountQuotaAutoPauseThreshold(row, "auto_pause_7d_threshold")
+		if snapshot, ok := grokquota.FromCredentialValue(row.Credentials[grokquota.CredentialsKeyUsageSnapshot]); ok {
+			resp.GrokUsageSnapshot = snapshot
+		}
 		resp.AutoPause5hDisabled = row.GetCredentialBool("auto_pause_5h_disabled")
 		resp.AutoPause7dDisabled = row.GetCredentialBool("auto_pause_7d_disabled")
 		resp.DispatchCountLimit = accountDispatchCountLimit(row)
@@ -960,6 +994,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 				UserBilled:    usage.UserBilled,
 			}
 		}
+		applyGrokUsageSnapshotToQuotaFields(&resp, resp.GrokUsageSnapshot)
 		accounts = append(accounts, resp)
 	}
 
@@ -3742,6 +3777,29 @@ func (h *Handler) RefreshAccountUsage(c *gin.Context) {
 	}
 
 	resp := gin.H{"refreshed": true}
+	if account.IsGrokPlatform() {
+		if row, rowErr := h.db.GetAccountByID(ctx, id); rowErr == nil && row != nil {
+			if snapshot, ok := grokquota.FromCredentialValue(row.Credentials[grokquota.CredentialsKeyUsageSnapshot]); ok {
+				resp["grok_usage_snapshot"] = snapshot
+				projected := &accountResponse{GrokUsageSnapshot: snapshot}
+				applyGrokUsageSnapshotToQuotaFields(projected, snapshot)
+				if projected.UsagePercent7d != nil {
+					resp["usage_percent_7d"] = *projected.UsagePercent7d
+				}
+				if projected.Reset7dAt != "" {
+					resp["reset_7d_at"] = projected.Reset7dAt
+				}
+			}
+			if diagnostic, ok := grokquota.FromCredentialValue(row.Credentials[grokquota.CredentialsKeyBillingDiagnostic]); ok {
+				resp["grok_usage_billing_diagnostic"] = diagnostic
+			}
+			if observation, ok := grokquota.FromCredentialValue(row.Credentials[grokquota.CredentialsKeyHeaderObservation]); ok {
+				resp["grok_usage_header_observer"] = observation
+			}
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+	}
 	if pct, ok := account.GetUsagePercent5h(); ok {
 		resp["usage_percent_5h"] = pct
 	}

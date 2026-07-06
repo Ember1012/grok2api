@@ -186,7 +186,7 @@
   },
   "accounts": {
     "title": "账号管理",
-    "description": "管理 Codex 反代账号（Refresh Token）",
+    "description": "管理 Grok 账号（OAuth / Refresh Token）",
     "loadingTitle": "正在加载账号",
     "loadingDesc": "账号池和实时状态正在同步。",
     "errorTitle": "账号页加载失败",
@@ -394,8 +394,8 @@
     "accountBilledLabel": "账号",
     "userBilledLabel": "用户",
     "quotaDistributionTitle": "额度分布",
-    "quotaDistributionDesc": "非封禁 Codex 账号的使用额度分布，已采样 {{sampled}} / {{total}} 个账号。",
-    "quotaDistributionEmpty": "暂无非封禁 Codex 账号。",
+    "quotaDistributionDesc": "非封禁 Grok 账号的使用额度分布，已采样 {{sampled}} / {{total}} 个账号。",
+    "quotaDistributionEmpty": "暂无非封禁 Grok 账号。",
     "quotaDistributionNoSample": "暂无已采样的额度数据。",
     "quotaDistributionAccountCount": "账号数",
     "quotaDistributionBucketPercent": "区间占比",
@@ -868,9 +868,9 @@
     "billed": "成本"
   },
   "invite": {
-    "entry": "Codex 邀请",
-    "title": "Codex 邀请",
-    "description": "用已托管的 Codex 账号发送推荐邀请邮件",
+    "entry": "Grok 邀请",
+    "title": "Grok 邀请",
+    "description": "用已托管的 Grok 账号发送推荐邀请邮件",
     "back": "返回账号列表",
     "accountLabel": "选择账号",
     "accountPlaceholder": "输入邮箱、名称或账号 ID 搜索",
@@ -887,7 +887,7 @@
     "noAccountMatches": "没有匹配的账号",
     "planLabel": "套餐",
     "statusLabel": "状态",
-    "noCodexAccounts": "没有可用于邀请的 Codex 账号",
+    "noCodexAccounts": "没有可用于邀请的 Grok 账号",
     "noAccountSelected": "请选择一个账号",
     "emailsLabel": "邀请邮箱",
     "emailsPlaceholder": "每行一个邮箱，或用逗号/空格分隔",
@@ -1999,11 +1999,11 @@
   },
   "guide": {
     "title": "使用教程",
-    "description": "了解如何配置和调用 CodexProxy API 端点",
+    "description": "了解如何配置和调用 GrokProxy API 端点",
     "copy": "复制",
     "copied": "已复制",
     "endpoints": "API 端点",
-    "endpointsDesc": "CodexProxy 提供三个 API 端点，兼容不同的客户端格式。",
+    "endpointsDesc": "GrokProxy 提供三个 API 端点，兼容不同的客户端格式。",
     "responsesTitle": "POST /v1/responses",
     "responsesDesc": "Codex Responses API 原生端点，直接透传请求到上游。适用于 Codex CLI、OpenAI SDK 等原生客户端。",
     "chatTitle": "POST /v1/chat/completions",
@@ -2197,7 +2197,7 @@
   },
   "apiRef": {
     "title": "API 文档",
-    "description": "CodexProxy API 端点参考文档，包含请求格式和响应示例",
+    "description": "GrokProxy API 端点参考文档，包含请求格式和响应示例",
     "authSection": "认证",
     "authDesc": "所有 API 请求需要通过以下方式之一传递密钥：",
     "responses": {
@@ -2221,7 +2221,7 @@
       "desc": "检查服务状态和可用账号数量。此端点不需要认证。"
     },
     "accountSection": "账号管理接口",
-    "accountSectionDesc": "以下接口用于管理 Codex 账号，需要通过 X-Admin-Key 请求头传递管理密钥。",
+    "accountSectionDesc": "以下接口用于管理 Grok 账号，需要通过 X-Admin-Key 请求头传递管理密钥。",
     "addAccount": {
       "title": "Add Account (Refresh Token)",
       "desc": "通过 Refresh Token 添加单个账号。添加后自动刷新 Access Token 并加入号池。name 为可选项，proxy_url 可留空。"

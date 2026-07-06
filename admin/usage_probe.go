@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/internal/grokquota"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
@@ -31,7 +32,7 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 	}
 
 	if account.IsGrokPlatform() {
-		return h.probeUsageViaResponses(ctx, account)
+		return h.probeGrokQuotaUsage(ctx, account)
 	}
 
 	// 限流/冷却（429 或 premium 5h 限流）状态下只做 wham（零成本），
@@ -52,6 +53,92 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 
 	// 2) Fallback: 原有的 /responses 最小探针
 	return h.probeUsageViaResponses(ctx, account)
+}
+
+func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account) error {
+	if h == nil || h.db == nil || account == nil {
+		return nil
+	}
+	account.Mu().RLock()
+	accessToken := account.AccessToken
+	baseURL := account.BaseURL
+	accountID := account.DBID
+	account.Mu().RUnlock()
+	client := grokquota.Client{
+		HTTPClient: auth.BuildHTTPClient(h.store.ResolveProxyForAccount(account)),
+		BaseURL:    baseURL,
+		Token:      accessToken,
+	}
+
+	billingResult, billingErr := client.FetchCreditsConfig(ctx)
+	if billingResult != nil {
+		credentials := map[string]interface{}{
+			grokquota.CredentialsKeyBillingDiagnostic: billingResult.Snapshot,
+		}
+		if billingResult.Snapshot.Source == grokquota.SourceGrokBuildBilling && billingResult.Snapshot.State == grokquota.StateObserved {
+			credentials[grokquota.CredentialsKeyUsageSnapshot] = billingResult.Snapshot
+		}
+		if updateErr := h.db.UpdateCredentials(ctx, accountID, credentials); updateErr != nil {
+			log.Printf("[账号 %d] 保存 Grok billing 用量状态失败: %v", accountID, updateErr)
+		}
+	}
+	if billingErr == nil && billingResult != nil && billingResult.Snapshot.State == grokquota.StateObserved {
+		h.store.ReportRequestSuccess(account, 0)
+		h.store.ClearCooldown(account)
+		return nil
+	}
+	if billingResult != nil {
+		switch billingResult.Snapshot.State {
+		case grokquota.StateUnauthorized:
+			h.store.ReportRequestFailure(account, "client", 0)
+			h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", "Grok billing 用量接口返回未授权")
+			return billingErr
+		case grokquota.StateForbidden:
+			h.store.MarkError(account, "Grok billing 用量接口返回无权限")
+			return billingErr
+		case grokquota.StateRateLimited:
+			h.store.ReportRequestFailure(account, "client", 0)
+			return billingErr
+		}
+	}
+
+	headerResult, headerErr := client.FetchQuotaSnapshot(ctx)
+	if headerResult != nil {
+		if updateErr := h.db.UpdateCredentials(ctx, accountID, map[string]interface{}{
+			grokquota.CredentialsKeyHeaderObservation: headerResult.Snapshot,
+		}); updateErr != nil {
+			log.Printf("[账号 %d] 保存 Grok header 观测状态失败: %v", accountID, updateErr)
+		}
+	}
+	if headerErr != nil {
+		if headerResult != nil {
+			switch headerResult.Snapshot.State {
+			case grokquota.StateUnauthorized:
+				h.store.ReportRequestFailure(account, "client", 0)
+				h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", "Grok quota header 探针返回未授权")
+			case grokquota.StateForbidden:
+				h.store.MarkError(account, "Grok quota header 探针返回无权限")
+			case grokquota.StateRateLimited:
+				h.store.ReportRequestFailure(account, "client", 0)
+			case grokquota.StateUnavailable:
+				if headerResult.Snapshot.UpstreamStatusCode >= 500 || headerResult.Snapshot.UpstreamStatusCode == 0 {
+					h.store.ReportRequestFailure(account, "server", 0)
+				}
+			}
+		}
+		if billingErr != nil {
+			return billingErr
+		}
+		return headerErr
+	}
+	if headerResult != nil && headerResult.Snapshot.State == grokquota.StateObserved {
+		h.store.ReportRequestSuccess(account, 0)
+		h.store.ClearCooldown(account)
+	}
+	if billingErr != nil {
+		log.Printf("[账号 %d] Grok billing weekly 用量暂不可用，已保留旧周额度并保存 header 诊断: %v", accountID, billingErr)
+	}
+	return nil
 }
 
 // probeUsageViaWham 通过 /backend-api/wham/usage 拉取用量，

@@ -713,7 +713,7 @@ export default function Docs() {
     ccSwitchApp === "claude" ? claudeModelOptions : modelOptions;
   const quickTools = useMemo(() => buildQuickTools(docsLocale), [docsLocale]);
   const ccSwitchConfig = CC_SWITCH_APPS[ccSwitchApp];
-  const siteName = settings?.site_name?.trim() || "CodexProxy";
+  const siteName = settings?.site_name?.trim() || "GrokProxy";
   const defaultCcSwitchName = `${siteName} ${ccSwitchConfig.suffix}`;
   const defaultCherryProviderId = slugProviderId(siteName);
   const showQuickCodexOptions =

@@ -28,6 +28,7 @@ import type {
   ModelsResponse,
   GrokOAuthExchangeResponse,
   GrokOAuthURLResponse,
+  GrokUsageSnapshot,
   UpdateGrokOAuthAccountRequest,
   OpsErrorSummary,
   OpsOverviewResponse,
@@ -263,6 +264,7 @@ export const api = {
       usage_percent_7d?: number
       reset_5h_at?: string
       reset_7d_at?: string
+      grok_usage_snapshot?: GrokUsageSnapshot
     }>(`/accounts/${id}/usage/refresh`, { method: 'POST' }),
   updateAccountScheduler: (id: number, data: UpdateAccountSchedulerRequest) =>
     request<MessageResponse>(`/accounts/${id}/scheduler`, { method: 'PATCH', body: JSON.stringify(data) }),

@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
 </p>
 
-**把 Codex 账号池变成可观测、可调度、可运维的 OpenAI / Anthropic 兼容网关。** Codex2API 不是一个薄转发层，而是一套面向长期运行的 Codex 接入中枢：对外提供 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`、Images 和 Models 等接口，对内维护 Refresh Token / Access Token 账号池、健康度评分、动态并发、限流恢复、用量统计和后台运维。
+**把 Grok 账号池变成可观测、可调度、可运维的 API 网关。** GrokProxy 不是一个薄转发层，而是一套面向长期运行的 Grok 接入中枢：对外提供 `/v1/chat/completions`、`/v1/responses`、`/v1/messages`、Images 和 Models 等接口，对内维护 OAuth / Refresh Token / Access Token 账号池、健康度评分、动态并发、限流恢复、用量统计和后台运维。
 
 它可以跑在完整的 **PostgreSQL + Redis** 生产形态，也可以用 **SQLite + 内存缓存** 单容器轻量部署。你可以把它接到 Codex CLI、Claude Code、OpenAI SDK 或任何兼容客户端上，用一个统一 Base URL 管理多账号、代理池、API Key、Prompt 检查、生图工作台和运行时配置。
 
@@ -44,7 +44,7 @@
 
 > 以下截图使用演示数据，实际页面会随账号池、请求日志和运行环境变化。
 
-![CodexProxy 仪表盘](docs/screenshots/dashboard.png)
+![GrokProxy 仪表盘](docs/screenshots/dashboard.png)
 
 <details>
 <summary>查看更多后台界面</summary>
