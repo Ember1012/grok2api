@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -6562,4 +6563,41 @@ func (s *Store) refreshAccountWithOptions(ctx context.Context, acc *Account, for
 	}
 
 	return nil
+}
+
+// ErrRefreshTokenMissing 表示账号缺少 refresh_token，无法通过刷新恢复 Access Token 失效。
+var ErrRefreshTokenMissing = errors.New("refresh_token 为空，无法通过刷新恢复鉴权失败")
+
+// RefreshAccountAfterAuthFailure 在检测到 xAI bad-credentials（或等价的 Access Token 失效）时安全触发一次刷新。
+// 设计要点（符合 Grok Provider Token 规则）：
+//   - AT-only 账号（无 RT）直接返回 ErrRefreshTokenMissing，不调用 token endpoint
+//   - 进入前快速检查当前 AT 是否已变化（其他协程已刷新），避免不必要刷新
+//   - 内部复用 tokenCache 的 AcquireRefreshLock + WaitForRefreshComplete，实现跨协程/跨进程去重，防止 refresh storm
+//   - 刷新成功后由 refreshAccountWithOptions 负责：
+//        * 新 RT 存在则保存，否则保留旧 RT
+//        * 更新 expires_at、内存 Account 和数据库 credentials
+//        * 清理 Error 状态
+//   - 本方法只负责“恢复尝试”，不修改 cooldown；调用方（quota probe / test / proxy）在成功后决定是否 ClearError / 重试原请求
+//   - 最多只刷新一次（由锁保证），刷新失败则返回原 err，由调用方标记 unhealthy
+func (s *Store) RefreshAccountAfterAuthFailure(ctx context.Context, acc *Account, failedAccessToken string) error {
+	if s == nil || acc == nil {
+		return nil
+	}
+
+	acc.mu.RLock()
+	rt := strings.TrimSpace(acc.RefreshToken)
+	currAT := strings.TrimSpace(acc.AccessToken)
+	acc.mu.RUnlock()
+
+	if rt == "" {
+		return ErrRefreshTokenMissing
+	}
+
+	// 快速路径：其他协程已成功刷新（常见于 20 并发命中同一失效 AT）
+	if currAT != "" && failedAccessToken != "" && currAT != failedAccessToken {
+		return nil
+	}
+
+	// 复用现有强制刷新路径（内部已包含缓存检查、刷新锁、RT 轮换、持久化、状态更新）
+	return s.refreshAccountWithOptions(ctx, acc, true)
 }

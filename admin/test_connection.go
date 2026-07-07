@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/codex2api/auth"
+	"github.com/codex2api/internal/grokquota"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -1315,6 +1316,10 @@ func shouldMarkBatchTestAccountError(statusCode int, body []byte) bool {
 		return true
 	}
 	if statusCode == http.StatusForbidden {
+		// 精确识别 bad-credentials，不立即标记错误，由调用方尝试 RefreshAccountAfterAuthFailure 恢复
+		if grokquota.IsXAIInvalidAccessToken(statusCode, body) {
+			return false
+		}
 		return true
 	}
 	if statusCode == http.StatusBadRequest {

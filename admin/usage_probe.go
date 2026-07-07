@@ -117,6 +117,23 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 				h.store.ReportRequestFailure(account, "client", 0)
 				h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", "Grok quota header 探针返回未授权")
 			case grokquota.StateForbidden:
+				// 精确识别 bad-credentials，优先尝试安全刷新一次（最多一次，由 Store 锁保证）
+				body := headerResult.RawBody
+				if grokquota.IsXAIInvalidAccessToken(403, body) {
+					if recErr := h.store.RefreshAccountAfterAuthFailure(ctx, account, accessToken); recErr != nil {
+						if recErr == auth.ErrRefreshTokenMissing {
+							h.store.MarkError(account, "Grok quota header 探针返回无权限（缺少 refresh_token，需要重新授权）")
+							return recErr
+						}
+						// 刷新失败（RT 失效等），保留原错误，不无限重试
+						h.store.MarkError(account, "Grok quota header 探针返回无权限（刷新失败）")
+						return recErr
+					}
+					// 刷新成功，清除可能的 error 状态，由下一次 probe 或手动测试验证
+					h.store.ClearCooldown(account)
+					log.Printf("[账号 %d] Grok quota header 探针检测到 bad-credentials，已成功刷新 Access Token", accountID)
+					return nil
+				}
 				h.store.MarkError(account, "Grok quota header 探针返回无权限")
 			case grokquota.StateRateLimited:
 				h.store.ReportRequestFailure(account, "client", 0)
