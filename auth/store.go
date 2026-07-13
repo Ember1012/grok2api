@@ -96,16 +96,6 @@ type Account struct {
 	UsageUpdatedAt      time.Time // 7d 用量快照刷新时间
 	UsageUpdatedAt5h    time.Time // 5h 用量快照刷新时间
 
-	// RateLimitResetCredits 是 OpenAI 官方账号剩余的「主动重置次数」，来自
-	// /backend-api/wham/usage 响应的 rate_limit_reset_credits.available_count。
-	// -1 表示尚未探测过（未知）；>=0 为已知次数。
-	RateLimitResetCredits      int
-	RateLimitResetCreditsValid bool
-	// resetCreditsProbedAt 记录最近一次成功 wham 用量探针的时间。
-	// 「主动重置次数」只能通过 wham 探针刷新（普通 /responses 流量不携带该字段），
-	// 因此用它独立判断重置次数是否过期，避免活跃账号因用量快照一直被流量刷新而长期不探针。
-	resetCreditsProbedAt time.Time
-
 	usageProbeInFlight          bool
 	recoveryProbeInFlight       bool
 	lastAuthVerifyAt            time.Time // WS 上游异常关闭后触发的鉴权验证探针节流时间戳
@@ -1561,33 +1551,6 @@ func (a *Account) GetUsagePercent5h() (float64, bool) {
 	return a.UsagePercent5h, a.UsagePercent5hValid
 }
 
-// SetRateLimitResetCredits 记录账号剩余的「主动重置次数」。
-func (a *Account) SetRateLimitResetCredits(count int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if count < 0 {
-		count = 0
-	}
-	a.RateLimitResetCredits = count
-	a.RateLimitResetCreditsValid = true
-}
-
-// GetRateLimitResetCredits 返回账号剩余的「主动重置次数」及其是否已探测过。
-func (a *Account) GetRateLimitResetCredits() (int, bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.RateLimitResetCredits, a.RateLimitResetCreditsValid
-}
-
-// MarkResetCreditsProbed 记录最近一次成功 wham 用量探针的时间。
-// 调用方应在 wham 探针成功（拿到 usage）后调用，无论本次响应是否带 reset_credits 字段，
-// 因为「能成功拉到 wham」本身就代表重置次数已是最新。
-func (a *Account) MarkResetCreditsProbed(t time.Time) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.resetCreditsProbedAt = t
-}
-
 // ClearUsageCache 清除内存中的用量缓存，下次请求时从上游重新获取
 func (a *Account) ClearUsageCache() {
 	a.mu.Lock()
@@ -1963,24 +1926,13 @@ func (a *Account) NeedsUsageProbe(maxAge time.Duration) bool {
 	if a.Status == StatusCooldown && a.CooldownReason == "unauthorized" && (a.CooldownUtil.IsZero() || now.Before(a.CooldownUtil)) {
 		return false // token 失效，wham 也会 401，探针无意义
 	}
-
-	// 「主动重置次数」只能由 wham 探针刷新（普通 /responses 流量不携带该字段），
-	// 因此用独立的 resetCreditsProbedAt 判断它是否过期。否则活跃账号的用量快照被
-	// 业务流量持续刷新，会让用量看起来一直"新鲜"，从而长期不触发 wham 探针、
-	// 重置次数迟迟探测不出来。
-	resetCreditsStale := a.resetCreditsProbedAt.IsZero() || now.Sub(a.resetCreditsProbedAt) > maxAge
-
 	if a.premium5hRateLimitedLocked(now) {
-		// premium 5h 限流期间不发 /responses 探活，但 wham 零成本，仍允许其刷新重置次数。
-		return resetCreditsStale
+		// premium 5h 限流期间不发探针（避免 /responses 加重限流；也不再为 reset-credits 探 wham）。
+		return false
 	}
 	if a.Status == StatusCooldown && a.CooldownReason == "rate_limited" && (a.CooldownUtil.IsZero() || now.Before(a.CooldownUtil)) {
-		// 429 冷却期间不发 /responses 探活（避免加重限流），但允许 wham-only 探针刷新重置次数——
-		// 这正是用户最需要看到"还剩几次主动重置"的时刻。
-		return resetCreditsStale
-	}
-	if resetCreditsStale {
-		return true
+		// 429 冷却期间不发探针，等冷却结束再按正常用量窗口判断。
+		return false
 	}
 	if !a.UsagePercent7dValid || a.UsageUpdatedAt.IsZero() || now.Sub(a.UsageUpdatedAt) > maxAge {
 		return true
@@ -6484,7 +6436,8 @@ func (s *Store) refreshAccountWithOptions(ctx context.Context, acc *Account, for
 			} else {
 				skippedPlanType = plan
 			}
-		} else if acc.PlanType == "" {
+		} else if acc.PlanType == "" && !acc.IsGrokPlatform() {
+			// Grok 套餐以用量探针响应头 xai-subscription-tier 为准，JWT 常无 plan_type，不告警。
 			log.Printf("[账号 %d] 刷新后 plan_type 为空，无法识别套餐类型", dbID)
 		}
 		if !info.SubscriptionExpiresAt.IsZero() {

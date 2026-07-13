@@ -217,6 +217,234 @@ func TestBillingBaseURLIgnoresAPIBaseURL(t *testing.T) {
 	}
 }
 
+// HAR 证实：账单页 SuperGrok 来自 GET /rest/subscriptions，非 JWT / 非仅靠 api.x.ai header。
+// 鉴权：Bearer xAI OAuth AT（与 billing 一致）。mock 仅覆盖 HTTP 200；运行时 401 需后续 cookie 路径。
+func TestFetchSubscriptionsHARSampleMapsToSuper(t *testing.T) {
+	const harBody = `{
+  "isSuperGrokLiteUser": false,
+  "isSuperGrokUser": true,
+  "isSuperGrokProUser": false,
+  "bestSubscription": "SUBSCRIPTION_TIER_GROK_PRO",
+  "activeSubscriptions": [{
+    "tier": "SUBSCRIPTION_TIER_GROK_PRO",
+    "status": "SUBSCRIPTION_STATUS_ACTIVE",
+    "billingPeriodEnd": "2026-07-19T15:42:24.000Z"
+  }]
+}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != subscriptionsPath {
+			t.Fatalf("path = %q, want %s", r.URL.Path, subscriptionsPath)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if got := r.Header.Get("Accept"); !strings.Contains(got, "application/json") {
+			t.Fatalf("Accept = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(harBody))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "test-token"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if result.PlanKey != "super" {
+		t.Fatalf("PlanKey = %q, want super", result.PlanKey)
+	}
+	if result.Subscription.RawTier() != "SUBSCRIPTION_TIER_GROK_PRO" {
+		t.Fatalf("RawTier = %q", result.Subscription.RawTier())
+	}
+	if result.Subscription.BillingPeriodEnd != "2026-07-19T15:42:24Z" {
+		t.Fatalf("BillingPeriodEnd = %q", result.Subscription.BillingPeriodEnd)
+	}
+	if result.AuthFailed {
+		t.Fatal("AuthFailed should be false on 200")
+	}
+}
+
+func TestFetchSubscriptionsProUserMapsToHeavy(t *testing.T) {
+	body := `{
+  "isSuperGrokLiteUser": false,
+  "isSuperGrokUser": false,
+  "isSuperGrokProUser": true,
+  "bestSubscription": "SUBSCRIPTION_TIER_SUPER_GROK_PRO",
+  "activeSubscriptions": [{
+    "tier": "SUBSCRIPTION_TIER_SUPER_GROK_PRO",
+    "status": "SUBSCRIPTION_STATUS_ACTIVE",
+    "billingPeriodEnd": "2026-08-01T00:00:00.000Z"
+  }]
+}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if result.PlanKey != "heavy" {
+		t.Fatalf("PlanKey = %q, want heavy", result.PlanKey)
+	}
+}
+
+func TestFetchSubscriptions401IsAuthFailedNotFree(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err == nil {
+		t.Fatal("expected error on 401")
+	}
+	if result == nil || !result.AuthFailed {
+		t.Fatalf("AuthFailed = %#v, want true (must not treat as free/no plan)", result)
+	}
+	if result.PlanKey != "" {
+		t.Fatalf("PlanKey must stay empty on auth failure, got %q", result.PlanKey)
+	}
+}
+
+// 真实 REST：{ "subscriptions": [ { tier GROK_PRO, status ACTIVE } ] } → super
+func TestFetchSubscriptionsRESTPaidMapsToSuper(t *testing.T) {
+	const body = `{
+  "subscriptions": [{
+    "tier": "SUBSCRIPTION_TIER_GROK_PRO",
+    "status": "SUBSCRIPTION_STATUS_ACTIVE",
+    "billingPeriodEnd": "2026-07-19T15:42:24.000Z"
+  }]
+}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if !result.Subscription.Observed {
+		t.Fatal("Observed should be true for REST subscriptions list")
+	}
+	if !result.Subscription.IsSuperGrokUser {
+		t.Fatal("IsSuperGrokUser should be true for GROK_PRO ACTIVE")
+	}
+	if result.PlanKey != "super" {
+		t.Fatalf("PlanKey = %q, want super", result.PlanKey)
+	}
+	if result.Subscription.RawTier() != "SUBSCRIPTION_TIER_GROK_PRO" {
+		t.Fatalf("RawTier = %q", result.Subscription.RawTier())
+	}
+	if result.Subscription.BillingPeriodEnd != "2026-07-19T15:42:24Z" {
+		t.Fatalf("BillingPeriodEnd = %q", result.Subscription.BillingPeriodEnd)
+	}
+}
+
+// free REST：{ "subscriptions": [] } → free（合法空列表）
+func TestFetchSubscriptionsRESTEmptyMapsToFree(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"subscriptions":[]}`))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if !result.Subscription.Observed {
+		t.Fatal("Observed should be true for empty subscriptions array")
+	}
+	if result.PlanKey != "free" {
+		t.Fatalf("PlanKey = %q, want free", result.PlanKey)
+	}
+}
+
+// free SSR：flags false + empty activeSubscriptions → free
+func TestFetchSubscriptionsSSRFreeFlagsMapsToFree(t *testing.T) {
+	const body = `{
+  "isSuperGrokLiteUser": false,
+  "isSuperGrokUser": false,
+  "isSuperGrokProUser": false,
+  "bestSubscription": "",
+  "activeSubscriptions": []
+}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if !result.Subscription.Observed {
+		t.Fatal("Observed should be true for SSR free shape")
+	}
+	if result.PlanKey != "free" {
+		t.Fatalf("PlanKey = %q, want free", result.PlanKey)
+	}
+}
+
+// {} 无 subscriptions 字段 → Observed=false，PlanKey 空（不写库）
+func TestFetchSubscriptionsEmptyObjectPlanKeyEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if result.Subscription.Observed {
+		t.Fatal("Observed should be false for {}")
+	}
+	if result.PlanKey != "" {
+		t.Fatalf("PlanKey = %q, want empty (must not write free)", result.PlanKey)
+	}
+}
+
+// REST SUPER_GROK_PRO → heavy
+func TestFetchSubscriptionsRESTProMapsToHeavy(t *testing.T) {
+	const body = `{
+  "subscriptions": [{
+    "tier": "SUBSCRIPTION_TIER_SUPER_GROK_PRO",
+    "status": "SUBSCRIPTION_STATUS_ACTIVE",
+    "billingPeriodEnd": "2026-08-01T00:00:00.000Z"
+  }]
+}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	result, err := (Client{HTTPClient: server.Client(), BillingBaseURL: server.URL, Token: "tok"}).FetchSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSubscriptions: %v", err)
+	}
+	if !result.Subscription.IsSuperGrokProUser {
+		t.Fatal("IsSuperGrokProUser should be true")
+	}
+	if result.PlanKey != "heavy" {
+		t.Fatalf("PlanKey = %q, want heavy", result.PlanKey)
+	}
+}
+
 func TestFetchQuotaSnapshotUsesResponsesProbeAndHeaders(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {

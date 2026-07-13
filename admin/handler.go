@@ -49,10 +49,9 @@ type Handler struct {
 	rateLimiter            *proxy.RateLimiter
 	systemUpdate           *systemUpdater
 	systemUpdateOnce       sync.Once
-	refreshAccount         func(context.Context, int64) error
-	probeUsage             func(context.Context, *auth.Account) error
-	syncAccountPlanOnReset func(context.Context, *auth.Account) error
-	cpuSampler             *cpuSampler
+	refreshAccount func(context.Context, int64) error
+	probeUsage     func(context.Context, *auth.Account) error
+	cpuSampler     *cpuSampler
 	startedAt              time.Time
 	pgMaxConns             int
 	redisPoolSize          int
@@ -71,10 +70,6 @@ type Handler struct {
 	reqCountMu        sync.RWMutex
 	reqCountCache     map[int64]*database.AccountRequestCount
 	reqCountExpiresAt time.Time
-
-	// 「主动重置次数」消耗操作的账号级互斥锁（dbID -> *sync.Mutex），
-	// 串行化同一账号的并发重置，避免重复消耗与次数计数竞态。
-	resetCreditLocks sync.Map
 }
 
 type chartCacheEntry struct {
@@ -329,7 +324,6 @@ func NewHandler(store *auth.Store, db *database.DB, tc cache.TokenCache, rl *pro
 	}
 	handler.refreshAccount = handler.refreshSingleAccount
 	handler.probeUsage = handler.ProbeUsageSnapshot
-	handler.syncAccountPlanOnReset = handler.syncSingleAccountPlanOnReset
 	if db != nil {
 		if err := db.MarkInterruptedImageJobs(context.Background()); err != nil {
 			log.Printf("标记中断生图任务失败: %v", err)
@@ -383,8 +377,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/:id/refresh", h.RefreshAccount)
 	api.POST("/accounts/:id/enable", h.ToggleAccountEnabled)
 	api.POST("/accounts/:id/lock", h.ToggleAccountLock)
-	api.POST("/accounts/:id/reset-status", h.ResetAccountStatus)
-	api.POST("/accounts/:id/reset-credits", h.ResetCredits)
 	api.POST("/accounts/:id/invite", h.SendInvite)
 	api.GET("/accounts/:id/test", h.TestConnection)
 	api.GET("/accounts/:id/usage", h.GetAccountUsage)
@@ -395,7 +387,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/batch-refresh", h.BatchRefreshAccounts)
 	api.POST("/accounts/batch-delete", h.BatchDeleteAccounts)
 	api.POST("/accounts/batch-update", h.BatchUpdateAccounts)
-	api.POST("/accounts/batch-reset-status", h.BatchResetStatus)
 	api.POST("/accounts/clean-banned", h.CleanBanned)
 	api.POST("/accounts/clean-rate-limited", h.CleanRateLimited)
 	api.POST("/accounts/clean-error", h.CleanError)
@@ -673,7 +664,6 @@ type accountResponse struct {
 	RateLimitAttempts        int64                      `json:"rate_limit_attempts"`
 	UsagePercent7d           *float64                   `json:"usage_percent_7d"`
 	UsagePercent5h           *float64                   `json:"usage_percent_5h"`
-	RateLimitResetCredits    *int                       `json:"rate_limit_reset_credits"`
 	AutoPause5hThreshold     *float64                   `json:"auto_pause_5h_threshold"`
 	AutoPause7dThreshold     *float64                   `json:"auto_pause_7d_threshold"`
 	AutoPause5hDisabled      bool                       `json:"auto_pause_5h_disabled"`
@@ -910,9 +900,6 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			}
 			if usagePct5h, ok := acc.GetUsagePercent5h(); ok {
 				resp.UsagePercent5h = &usagePct5h
-			}
-			if credits, ok := acc.GetRateLimitResetCredits(); ok {
-				resp.RateLimitResetCredits = &credits
 			}
 			if snapshot := acc.GetDispatchCountSnapshot(); snapshot.Limit > 0 {
 				limit := snapshot.Limit
@@ -4534,88 +4521,6 @@ func (h *Handler) ToggleAccountLock(c *gin.Context) {
 	} else {
 		writeMessage(c, http.StatusOK, "账号已解锁")
 	}
-}
-
-// ResetAccountStatus 重置单个账号状态为正常
-func (h *Handler) ResetAccountStatus(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		writeError(c, http.StatusBadRequest, "无效的账号 ID")
-		return
-	}
-
-	acc := h.store.FindByID(id)
-	if acc == nil {
-		writeError(c, http.StatusNotFound, "账号不在运行时池中")
-		return
-	}
-
-	h.store.ClearCooldown(acc)
-	acc.ClearUsageCache()
-	h.syncAccountPlanAfterReset(c.Request.Context(), acc)
-	writeMessage(c, http.StatusOK, "账号状态已重置")
-}
-
-// BatchResetStatus 批量重置账号状态为正常
-func (h *Handler) BatchResetStatus(c *gin.Context) {
-	var req struct {
-		IDs []int64 `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
-		writeError(c, http.StatusBadRequest, "请提供要重置的账号 ID 列表")
-		return
-	}
-
-	success := 0
-	fail := 0
-	for _, id := range req.IDs {
-		acc := h.store.FindByID(id)
-		if acc == nil {
-			fail++
-			continue
-		}
-		h.store.ClearCooldown(acc)
-		acc.ClearUsageCache()
-		h.syncAccountPlanAfterReset(c.Request.Context(), acc)
-		success++
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("已重置 %d 个账号状态", success),
-		"success": success,
-		"failed":  fail,
-	})
-}
-
-func (h *Handler) syncAccountPlanAfterReset(_ context.Context, acc *auth.Account) {
-	if h == nil || h.syncAccountPlanOnReset == nil || acc == nil {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := h.syncAccountPlanOnReset(ctx, acc); err != nil {
-			log.Printf("[账号 %d] 重置后同步 Codex plan type 失败: %v", acc.DBID, err)
-		}
-	}()
-}
-
-func (h *Handler) syncSingleAccountPlanOnReset(ctx context.Context, acc *auth.Account) error {
-	if h == nil || h.store == nil || acc == nil || acc.IsOpenAIResponsesAPI() || acc.GetAccessToken() == "" {
-		return nil
-	}
-	model, err := h.connectionTestModelForAccount(ctx, acc, "")
-	if err != nil {
-		return err
-	}
-	resp, err := proxy.ExecuteRequest(ctx, acc, buildConnectionTestPayload(h.store, model), "", h.store.ResolveProxyForAccount(acc), "", nil, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	proxy.SyncCodexUsageState(h.store, acc, resp)
-	return nil
 }
 
 func (h *Handler) refreshSingleAccount(ctx context.Context, id int64) error {

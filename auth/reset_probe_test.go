@@ -15,18 +15,17 @@ func TestNeedsUsageProbeFiresAtResetBoundary(t *testing.T) {
 	// base 构造一个「除待测窗口外一切正常/新鲜」的账号，隔离其它探测分支。
 	base := func() *Account {
 		return &Account{
-			AccessToken:          "at-x",
-			Status:               StatusReady,
-			PlanType:             "", // 非 premium，避开 premium5h 分支
-			resetCreditsProbedAt: now,
-			UsagePercent7d:       50,
-			UsagePercent7dValid:  true,
-			UsageUpdatedAt:       now,
-			Reset7dAt:            now.Add(time.Hour),
-			UsagePercent5h:       10,
-			UsagePercent5hValid:  true,
-			UsageUpdatedAt5h:     now,
-			Reset5hAt:            now.Add(time.Hour),
+			AccessToken:         "at-x",
+			Status:              StatusReady,
+			PlanType:            "", // 非 premium，避开 premium5h 分支
+			UsagePercent7d:      50,
+			UsagePercent7dValid: true,
+			UsageUpdatedAt:      now,
+			Reset7dAt:           now.Add(time.Hour),
+			UsagePercent5h:      10,
+			UsagePercent5hValid: true,
+			UsageUpdatedAt5h:    now,
+			Reset5hAt:           now.Add(time.Hour),
 		}
 	}
 

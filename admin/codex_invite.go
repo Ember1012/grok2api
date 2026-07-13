@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
@@ -130,4 +131,17 @@ func collectInviteEmails(list []string, text string, maxEmails int) ([]string, e
 		return nil, fmt.Errorf("邮箱数量超过上限 %d", maxEmails)
 	}
 	return emails, nil
+}
+
+// findAccountByID 按数据库 ID 在运行时号池中查找账号；找不到返回 nil。
+func (h *Handler) findAccountByID(id int64) *auth.Account {
+	if h.store == nil {
+		return nil
+	}
+	for _, acc := range h.store.Accounts() {
+		if acc != nil && acc.DBID == id {
+			return acc
+		}
+	}
+	return nil
 }

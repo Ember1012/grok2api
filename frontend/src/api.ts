@@ -281,16 +281,10 @@ export const api = {
     request<MessageResponse>(`/accounts/${id}/lock`, { method: 'POST', body: JSON.stringify({ locked }) }),
   batchUpdateAccounts: (data: BatchUpdateAccountsRequest) =>
     request<{ message: string; success: number; failed: number }>('/accounts/batch-update', { method: 'POST', body: JSON.stringify(data) }),
-  resetAccountStatus: (id: number) =>
-    request<MessageResponse>(`/accounts/${id}/reset-status`, { method: 'POST' }),
-  resetCredits: (id: number) =>
-    request<{ message: string; rate_limit_reset_credits?: number }>(`/accounts/${id}/reset-credits`, { method: 'POST' }),
   getAccountHealthBars: () =>
     request<AccountHealthBarsResponse>('/accounts/health-bars'),
   sendInvite: (id: number, data: { emails?: string[]; emails_text?: string; referral_key?: string; proxy_url?: string; max_emails?: number }) =>
     request<InviteResponse>(`/accounts/${id}/invite`, { method: 'POST', body: JSON.stringify(data) }),
-  batchResetStatus: (ids: number[]) =>
-    request<{ message: string; success: number; failed: number }>('/accounts/batch-reset-status', { method: 'POST', body: JSON.stringify({ ids }) }),
   getAccountUsage: (id: number, days?: number) => {
     const search = new URLSearchParams()
     if (typeof days === 'number') search.set('days', String(days))

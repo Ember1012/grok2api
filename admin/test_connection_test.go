@@ -108,6 +108,52 @@ func TestConnectionUnauthorizedRecordsErrorMessage(t *testing.T) {
 	}
 }
 
+func TestConnectionForbiddenPermissionDeniedMarksError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `{"code":"permission-denied","error":"Access to the chat endpoint is denied..."}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	defer server.Close()
+
+	store := auth.NewStore(nil, nil, nil)
+	account := &auth.Account{
+		DBID:         42,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		BaseURL:      server.URL,
+		APIKey:       "sk-test",
+		Models:       []string{"gpt-4o-mini"},
+		Status:       auth.StatusReady,
+		HealthTier:   auth.HealthTierHealthy,
+	}
+	store.AddAccount(account)
+	handler := &Handler{store: store}
+	router := gin.New()
+	router.GET("/api/admin/accounts/:id/test", handler.TestConnection)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/accounts/42/test", nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "permission-denied") {
+		t.Fatalf("SSE response %q does not contain permission-denied", recorder.Body.String())
+	}
+	if got := account.RuntimeStatus(); got != "error" {
+		t.Fatalf("RuntimeStatus() = %q, want error", got)
+	}
+	account.Mu().RLock()
+	errorMsg := account.ErrorMsg
+	account.Mu().RUnlock()
+	if !strings.Contains(errorMsg, "permission-denied") && !strings.Contains(errorMsg, "上游返回 403") {
+		t.Fatalf("ErrorMsg = %q, want to contain permission-denied or upstream info", errorMsg)
+	}
+}
+
 func TestExtractCompletedOutputText(t *testing.T) {
 	event := []byte(`{
 		"type":"response.completed",

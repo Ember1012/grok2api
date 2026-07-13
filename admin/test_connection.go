@@ -135,6 +135,10 @@ func (h *Handler) TestConnection(c *gin.Context) {
 				} else {
 					proxy.Apply429Cooldown(h.store, account, errBody, resp, testModel)
 				}
+			default:
+				if shouldMarkBatchTestAccountError(resp.StatusCode, errBody) {
+					h.store.MarkError(account, errMsg)
+				}
 			}
 		}
 		// 429 限流代表账号有效、只是被限流，不计为失败。

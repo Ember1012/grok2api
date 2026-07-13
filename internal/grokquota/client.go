@@ -20,6 +20,7 @@ import (
 
 const (
 	billingPath        = "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+	subscriptionsPath  = "/rest/subscriptions"
 	responsesProbePath = "/responses"
 	defaultAPIBaseURL  = "https://api.x.ai/v1"
 	defaultProbeModel  = "grok-4.3"
@@ -40,6 +41,18 @@ type Client struct {
 type ProbeResult struct {
 	Snapshot UsageSnapshot
 	RawBody  []byte
+}
+
+// SubscriptionResult 是 grok.com /rest/subscriptions 的解析结果。
+// 鉴权使用 xAI OAuth access_token 的 Bearer 路径（与 billing 一致）。
+// 测试仅 mock HTTP；运行时若 401 可能需后续 session cookie 路径，本层不引入 cookie。
+type SubscriptionResult struct {
+	Subscription GrokWebSubscription
+	PlanKey      string
+	HTTPStatus   int
+	// AuthFailed 表示 401/403：不是「无套餐」，调用方不得据此清空 plan_type。
+	AuthFailed bool
+	RawBody    []byte
 }
 
 func (c Client) FetchQuotaSnapshot(ctx context.Context) (*ProbeResult, error) {
@@ -381,6 +394,61 @@ func (c Client) FetchCreditsConfig(ctx context.Context) (*ProbeResult, error) {
 	return &ProbeResult{Snapshot: snapshot, RawBody: body}, nil
 }
 
+// FetchSubscriptions 拉取 grok.com 当前账号订阅（账单页 SuperGrok 权威源）。
+// GET {billingBaseURL}/rest/subscriptions，Bearer 与 billing 相同。
+// 不解析/不返回 purchaseToken 等支付细节。
+func (c Client) FetchSubscriptions(ctx context.Context) (*SubscriptionResult, error) {
+	client := c.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	billingBase := strings.TrimRight(strings.TrimSpace(c.BillingBaseURL), "/")
+	if billingBase == "" {
+		billingBase = billingBaseURL(c.BaseURL)
+	}
+	url := billingBase + subscriptionsPath
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	applySubscriptionsHeaders(req, c.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return &SubscriptionResult{HTTPStatus: resp.StatusCode, RawBody: body}, readErr
+	}
+	if resp.StatusCode != http.StatusOK {
+		authFailed := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+		msg := truncateBody(body, 240)
+		if msg == "" {
+			msg = http.StatusText(resp.StatusCode)
+		}
+		return &SubscriptionResult{
+			HTTPStatus: resp.StatusCode,
+			AuthFailed: authFailed,
+			RawBody:    body,
+		}, fmt.Errorf("grok subscriptions returned status %d: %s", resp.StatusCode, msg)
+	}
+
+	sub, err := parseGrokWebSubscriptionsJSON(body)
+	if err != nil {
+		return &SubscriptionResult{HTTPStatus: resp.StatusCode, RawBody: body}, err
+	}
+	return &SubscriptionResult{
+		Subscription: sub,
+		PlanKey:      MapGrokWebSubscriptionToPlanKey(sub),
+		HTTPStatus:   resp.StatusCode,
+		RawBody:      body,
+	}, nil
+}
+
 func billingBaseURL(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -403,6 +471,165 @@ func applyBillingHeaders(req *http.Request, token string) {
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
+}
+
+// applySubscriptionsHeaders：JSON GET，Bearer 与 billing 一致（grok.com 用 OAuth AT）。
+// 若生产 401，可能需 session cookie 路径——此处仅 Bearer，不引入 cookie。
+func applySubscriptionsHeaders(req *http.Request, token string) {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://grok.com")
+	req.Header.Set("Referer", "https://grok.com/")
+	req.Header.Set("User-Agent", "grok2api-grok-quota-probe/1.0")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+}
+
+// parseGrokWebSubscriptionsJSON 只取套餐判定字段，忽略 purchaseToken/payment 等。
+// 兼容两种形状：
+// A) REST: { "subscriptions": [ { tier, status, billingPeriodEnd } ] }（含空数组）
+// B) SSR: { isSuperGrokUser, bestSubscription, activeSubscriptions, ... }
+// {} 无 subscriptions 且无 SSR 字段 → Observed=false。
+func parseGrokWebSubscriptionsJSON(body []byte) (GrokWebSubscription, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return GrokWebSubscription{}, fmt.Errorf("decode grok subscriptions: %w", err)
+	}
+
+	// A) REST：存在 subscriptions 数组字段（含空数组）即为已观测。
+	if rawList, ok := top["subscriptions"]; ok {
+		var items []struct {
+			Tier             string `json:"tier"`
+			Status           string `json:"status"`
+			BillingPeriodEnd string `json:"billingPeriodEnd"`
+		}
+		if err := json.Unmarshal(rawList, &items); err != nil {
+			return GrokWebSubscription{}, fmt.Errorf("decode grok subscriptions list: %w", err)
+		}
+		return parseRESTSubscriptionsList(items), nil
+	}
+
+	// B) SSR：顶层 flag / bestSubscription / activeSubscriptions 任一字段存在。
+	ssrKeys := []string{
+		"isSuperGrokUser", "isSuperGrokProUser", "isSuperGrokLiteUser",
+		"bestSubscription", "activeSubscriptions",
+	}
+	hasSSR := false
+	for _, k := range ssrKeys {
+		if _, ok := top[k]; ok {
+			hasSSR = true
+			break
+		}
+	}
+	if !hasSSR {
+		return GrokWebSubscription{Observed: false}, nil
+	}
+
+	var raw struct {
+		IsSuperGrokLiteUser bool   `json:"isSuperGrokLiteUser"`
+		IsSuperGrokUser     bool   `json:"isSuperGrokUser"`
+		IsSuperGrokProUser  bool   `json:"isSuperGrokProUser"`
+		BestSubscription    string `json:"bestSubscription"`
+		ActiveSubscriptions []struct {
+			Tier             string `json:"tier"`
+			Status           string `json:"status"`
+			BillingPeriodEnd string `json:"billingPeriodEnd"`
+		} `json:"activeSubscriptions"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return GrokWebSubscription{}, fmt.Errorf("decode grok subscriptions: %w", err)
+	}
+	out := GrokWebSubscription{
+		Observed:            true,
+		IsSuperGrokLiteUser: raw.IsSuperGrokLiteUser,
+		IsSuperGrokUser:     raw.IsSuperGrokUser,
+		IsSuperGrokProUser:  raw.IsSuperGrokProUser,
+		BestSubscription:    strings.TrimSpace(raw.BestSubscription),
+	}
+	if len(raw.ActiveSubscriptions) > 0 {
+		a := raw.ActiveSubscriptions[0]
+		out.ActiveTier = strings.TrimSpace(a.Tier)
+		out.ActiveStatus = strings.TrimSpace(a.Status)
+		out.BillingPeriodEnd = normalizeBillingPeriodEnd(a.BillingPeriodEnd)
+	}
+	return out, nil
+}
+
+func parseRESTSubscriptionsList(items []struct {
+	Tier             string `json:"tier"`
+	Status           string `json:"status"`
+	BillingPeriodEnd string `json:"billingPeriodEnd"`
+}) GrokWebSubscription {
+	out := GrokWebSubscription{Observed: true}
+	bestRank := -1
+	for _, it := range items {
+		tier := strings.TrimSpace(it.Tier)
+		status := strings.TrimSpace(it.Status)
+		if tier == "" || !subscriptionStatusActive(status) {
+			continue
+		}
+		applyActiveRESTTierFlags(&out, tier)
+		rank := subscriptionTierRank(tier)
+		if rank < bestRank {
+			continue
+		}
+		// 同档保留先出现的；更高档覆盖
+		if rank > bestRank {
+			bestRank = rank
+			out.BestSubscription = tier
+			out.ActiveTier = tier
+			out.ActiveStatus = status
+			out.BillingPeriodEnd = normalizeBillingPeriodEnd(it.BillingPeriodEnd)
+		}
+	}
+	return out
+}
+
+func subscriptionStatusActive(status string) bool {
+	return strings.Contains(strings.ToLower(status), "active")
+}
+
+// subscriptionTierRank：heavy > super > lite > 其它；与前端 getSubscriptionsQueryData 对齐。
+func subscriptionTierRank(tier string) int {
+	lower := strings.ToLower(strings.TrimSpace(tier))
+	switch {
+	case strings.Contains(lower, "super_grok_pro") || strings.Contains(lower, "heavy"):
+		return 3
+	case strings.Contains(lower, "lite"):
+		return 1
+	case strings.Contains(lower, "grok_pro") || strings.Contains(lower, "super"):
+		return 2
+	default:
+		return 0
+	}
+}
+
+// applyActiveRESTTierFlags：ACTIVE 条目按 tier 设 flag（SUPER_GROK_PRO 先于 GROK_PRO）。
+func applyActiveRESTTierFlags(out *GrokWebSubscription, tier string) {
+	lower := strings.ToLower(strings.TrimSpace(tier))
+	switch {
+	case strings.Contains(lower, "super_grok_pro"):
+		out.IsSuperGrokProUser = true
+	case strings.Contains(lower, "lite"):
+		out.IsSuperGrokLiteUser = true
+	case strings.Contains(lower, "grok_pro"):
+		out.IsSuperGrokUser = true
+	}
+}
+
+func normalizeBillingPeriodEnd(raw string) string {
+	end := strings.TrimSpace(raw)
+	if end == "" {
+		return ""
+	}
+	if ts, err := time.Parse(time.RFC3339, end); err == nil {
+		return ts.UTC().Format(time.RFC3339)
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, end); err == nil {
+		return ts.UTC().Format(time.RFC3339)
+	}
+	// 非标准时间戳原样保留（调用方仍可展示）
+	return end
 }
 
 func decodeUnaryGrpcWeb(raw []byte) ([]byte, map[string]string, error) {

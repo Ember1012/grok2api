@@ -102,7 +102,6 @@ export interface AccountRow {
   rate_limit_attempts?: number
   usage_percent_7d?: number | null
   usage_percent_5h?: number | null
-  rate_limit_reset_credits?: number | null
   auto_pause_5h_threshold?: number | null
   auto_pause_7d_threshold?: number | null
   auto_pause_5h_disabled?: boolean

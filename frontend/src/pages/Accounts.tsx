@@ -643,7 +643,10 @@ export default function Accounts() {
   >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [planFilter, setPlanFilter] = useState<
-    "all" | "pro" | "prolite" | "plus" | "team" | "k12" | "free"
+    | "all"
+    | "free"
+    | "super"
+    | "heavy"
   >("all");
   const [sortKey, setSortKey] = useState<
     "requests" | "usage" | "importTime" | null
@@ -1431,8 +1434,14 @@ export default function Accounts() {
           break;
       }
       if (planFilter !== "all") {
-        const plan = (account.plan_type || "").toLowerCase().trim();
-        if (plan !== planFilter) return false;
+        const resolved = resolveAccountPlanType(account) || "";
+        const raw = resolved.toLowerCase().trim();
+        // super/heavy accept raw aliases (supergrok etc.); other chips stay exact-match
+        if (planFilter === "super" || planFilter === "heavy") {
+          if (normalizePlanType(resolved) !== planFilter) return false;
+        } else if (raw !== planFilter) {
+          return false;
+        }
       }
       if (query) {
         const email = (account.email || "").toLowerCase();
@@ -2773,61 +2782,6 @@ export default function Accounts() {
     }
   };
 
-  const handleResetStatus = async (account: AccountRow) => {
-    try {
-      await api.resetAccountStatus(account.id);
-      showToast(t("accounts.resetStatusSuccess"));
-      void reload();
-    } catch (error) {
-      showToast(
-        t("accounts.resetStatusFailed", { error: getErrorMessage(error) }),
-        "error",
-      );
-    }
-  };
-
-  // 主动重置额度：消耗 1 次「主动重置次数」立即重置该账号额度（带二次确认）。
-  const handleResetCredits = async (account: AccountRow) => {
-    const confirmed = await confirm({
-      title: t("accounts.resetCreditsButton"),
-      description: t("accounts.resetCreditsConfirmMessage"),
-      confirmText: t("accounts.resetCreditsConfirmButton"),
-      tone: "warning",
-    });
-    if (!confirmed) return;
-    try {
-      await api.resetCredits(account.id);
-      showToast(t("accounts.resetCreditsSuccess"));
-      void reload();
-    } catch (error) {
-      showToast(getErrorMessage(error), "error");
-    }
-  };
-
-  const handleBatchResetStatus = async () => {
-    const ids = Array.from(selected);
-    if (ids.length === 0) return;
-    setBatchLoading(true);
-    try {
-      const result = await api.batchResetStatus(ids);
-      showToast(
-        t("accounts.batchResetStatusDone", {
-          success: result.success,
-          fail: result.failed,
-        }),
-      );
-      setSelected(new Set());
-      void reload();
-    } catch (error) {
-      showToast(
-        t("accounts.resetStatusFailed", { error: getErrorMessage(error) }),
-        "error",
-      );
-    } finally {
-      setBatchLoading(false);
-    }
-  };
-
   const openBatchMetaEditor = () => {
     const selectedAccounts = accounts.filter((account) =>
       selected.has(account.id),
@@ -3767,7 +3721,7 @@ export default function Accounts() {
             </div>
             <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 max-sm:w-full max-sm:flex-wrap">
               {(
-                ["all", "pro", "prolite", "plus", "team", "k12", "free"] as const
+                ["all", "super", "heavy", "free"] as const
               ).map(
                 (key) => (
                   <button
@@ -3784,10 +3738,10 @@ export default function Accounts() {
                   >
                     {key === "all"
                       ? t("accounts.filterAll")
-                      : key === "prolite"
-                        ? "ProLite"
-                        : key === "k12"
-                          ? "K12"
+                      : key === "super"
+                        ? "SuperGrok"
+                        : key === "heavy"
+                          ? "SuperGrok Heavy"
                           : key.charAt(0).toUpperCase() + key.slice(1)}
                   </button>
                 ),
@@ -4010,15 +3964,6 @@ export default function Accounts() {
                   {t("accounts.batchAutoPauseEdit")}
                 </Button>
                 <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={batchLoading || batchTesting}
-                  onClick={() => void handleBatchResetStatus()}
-                >
-                  <RotateCcw className="size-3 mr-1" />
-                  {t("accounts.batchResetStatus")}
-                </Button>
-                <Button
                   variant="destructive"
                   size="sm"
                   disabled={batchLoading || batchTesting}
@@ -4088,10 +4033,6 @@ export default function Accounts() {
                             void handleToggleEnabled(account)
                           }
                           onToggleLock={() => void handleToggleLock(account)}
-                          onResetStatus={() => void handleResetStatus(account)}
-                          onResetCredits={() =>
-                            void handleResetCredits(account)
-                          }
                           onDelete={() => void handleDelete(account)}
                           onUsageRefreshed={() => void reloadSilently()}
                         />
@@ -4284,9 +4225,7 @@ export default function Accounts() {
                                   {(account.at_only ||
                                     account.openai_responses_api ||
                                     account.enabled === false ||
-                                    account.locked ||
-                                    (account.rate_limit_reset_credits ?? 0) >
-                                      0) && (
+                                    account.locked) && (
                                     <div className="flex flex-wrap gap-1">
                                       {account.at_only && (
                                         <span className="inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-400 dark:ring-amber-400/20">
@@ -4309,25 +4248,6 @@ export default function Accounts() {
                                           <Lock className="mr-0.5 size-2.5" />
                                           {t("accounts.lock")}
                                         </span>
-                                      )}
-                                      {(account.rate_limit_reset_credits ??
-                                        0) > 0 && (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setUsageAccount(account);
-                                          }}
-                                          className="inline-flex items-center rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-inset ring-violet-600/20 transition-colors hover:bg-violet-100 dark:bg-violet-950 dark:text-violet-400 dark:ring-violet-400/20 dark:hover:bg-violet-900"
-                                          title={t("accounts.resetCreditsBadge", {
-                                            count:
-                                              account.rate_limit_reset_credits ??
-                                              0,
-                                          })}
-                                        >
-                                          <RotateCcw className="mr-0.5 size-2.5" />
-                                          {account.rate_limit_reset_credits ?? 0}
-                                        </button>
                                       )}
                                     </div>
                                   )}
@@ -4364,10 +4284,12 @@ export default function Accounts() {
                             {visibleColumns.plan && (
                               <TableCell>
                                 <div className="flex flex-wrap items-center gap-1.5">
-                                  <PlanBadge planType={account.plan_type} />
+                                  <PlanBadge
+                                    planType={resolveAccountPlanType(account)}
+                                  />
                                   <ExpiryBadge
                                     expiresAt={account.subscription_expires_at}
-                                    planType={account.plan_type}
+                                    planType={resolveAccountPlanType(account)}
                                   />
                                 </div>
                               </TableCell>
@@ -4434,10 +4356,7 @@ export default function Accounts() {
                                         "-",
                                     })}
                                   </div>
-                                  <div className="space-y-0.5 pt-0.5">
-                                    <div className="text-[10px] text-muted-foreground/70">
-                                      {t("accounts.healthBarLabel")}
-                                    </div>
+                                  <div className="pt-0.5">
                                     <AccountHealthBar
                                       buckets={healthBars[String(account.id)]}
                                     />
@@ -4628,32 +4547,6 @@ export default function Accounts() {
                                     ) : (
                                       <Unlock className="size-3.5" />
                                     )}
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="icon"
-                                    className="h-7 w-8 px-0"
-                                    onClick={() =>
-                                      void handleResetStatus(account)
-                                    }
-                                    title={t("accounts.resetStatusHint")}
-                                  >
-                                    <RotateCcw className="size-3.5" />
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="icon"
-                                    className="h-7 w-8 px-0"
-                                    disabled={
-                                      (account.rate_limit_reset_credits ?? 0) <=
-                                      0
-                                    }
-                                    onClick={() =>
-                                      void handleResetCredits(account)
-                                    }
-                                    title={t("accounts.resetCreditsButton")}
-                                  >
-                                    <Timer className="size-3.5" />
                                   </Button>
                                   <Button
                                     variant="destructive"
@@ -5607,7 +5500,6 @@ export default function Accounts() {
             <AccountUsageModal
               account={usageAccount}
               onClose={() => setUsageAccount(null)}
-              onCreditsReset={() => void reload()}
             />
           )}
 
@@ -6809,7 +6701,12 @@ function RecycleBinView({
     null,
   );
   const [planFilter, setPlanFilter] = useState<
-    "all" | "pro" | "prolite" | "plus" | "team" | "free" | "api" | "unknown"
+    | "all"
+    | "free"
+    | "super"
+    | "heavy"
+    | "api"
+    | "unknown"
   >("all");
   const [showEmptyConfirm, setShowEmptyConfirm] = useState(false);
   const [emptyConfirmText, setEmptyConfirmText] = useState("");
@@ -6886,10 +6783,12 @@ function RecycleBinView({
     const keyword = search.trim().toLowerCase();
     return rows.filter((row) => {
       if (planFilter !== "all") {
-        const plan = (row.plan_type || "").toLowerCase().trim();
+        const raw = (row.plan_type || "").toLowerCase().trim();
         if (planFilter === "unknown") {
-          if (plan !== "") return false;
-        } else if (plan !== planFilter) {
+          if (raw !== "") return false;
+        } else if (planFilter === "super" || planFilter === "heavy") {
+          if (normalizePlanType(row.plan_type) !== planFilter) return false;
+        } else if (raw !== planFilter) {
           return false;
         }
       }
@@ -7205,16 +7104,7 @@ function RecycleBinView({
               </div>
               <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5 max-sm:w-full max-sm:flex-wrap">
                 {(
-                  [
-                    "all",
-                    "pro",
-                    "prolite",
-                    "plus",
-                    "team",
-                    "free",
-                    "api",
-                    "unknown",
-                  ] as const
+                  ["all", "super", "heavy", "free", "api", "unknown"] as const
                 ).map((key) => (
                   <button
                     key={key}
@@ -7229,11 +7119,13 @@ function RecycleBinView({
                       ? t("accounts.filterAll")
                       : key === "unknown"
                         ? t("accounts.recycleBinPlanUnknown")
-                        : key === "prolite"
-                          ? "ProLite"
-                          : key === "api"
-                            ? "API"
-                            : key.charAt(0).toUpperCase() + key.slice(1)}
+                        : key === "api"
+                          ? "API"
+                          : key === "super"
+                            ? "SuperGrok"
+                            : key === "heavy"
+                              ? "SuperGrok Heavy"
+                              : key.charAt(0).toUpperCase() + key.slice(1)}
                   </button>
                 ))}
               </div>
@@ -7913,11 +7805,59 @@ function getDispatchScore(account: AccountRow): number {
 // OpenAI reports the $100 Pro tier as "prolite" — functionally a Pro plan with
 // a smaller usage cap. Keep behavioral comparisons (usage windows, plan filter,
 // scheduler bias) aligned with the Go side by folding it into "pro".
+// Grok tiers arrive as plan_type "super"/"heavy"/"super_lite" or raw
+// subscription_tier / product_tier enums; fold those into stable keys.
 function normalizePlanType(planType?: string): string {
   const raw = (planType || "").toLowerCase().trim();
   if (raw === "prolite" || raw === "pro_lite" || raw === "pro-lite")
     return "pro";
+  // SuperGrok Lite (if present)
+  if (
+    raw === "super_lite" ||
+    raw === "super-lite" ||
+    raw === "superlite" ||
+    raw === "lite" ||
+    raw === "subscription_tier_super_grok_lite" ||
+    raw === "product_tier_super_grok_lite"
+  )
+    return "super_lite";
+  // SuperGrok Heavy / SUPER_GROK_PRO (check before plain GROK_PRO → super)
+  if (
+    raw === "heavy" ||
+    raw === "heavygrok" ||
+    raw === "heavy_grok" ||
+    raw === "heavy-grok" ||
+    raw === "grok_heavy" ||
+    raw === "grok-heavy" ||
+    raw === "subscription_tier_super_grok_pro" ||
+    raw === "product_tier_super_grok_pro" ||
+    raw === "subscription_tier_grok_heavy" ||
+    raw === "product_tier_grok_heavy"
+  )
+    return "heavy";
+  // SuperGrok / GROK_PRO
+  if (
+    raw === "super" ||
+    raw === "supergrok" ||
+    raw === "super_grok" ||
+    raw === "super-grok" ||
+    raw === "grok_super" ||
+    raw === "grok-super" ||
+    raw === "subscription_tier_grok_pro" ||
+    raw === "product_tier_grok_pro" ||
+    raw === "subscription_tier_super_grok" ||
+    raw === "product_tier_super_grok"
+  )
+    return "super";
   return raw;
+}
+
+/** Prefer plan_type; fall back to grok_usage_snapshot.subscription_tier when empty. */
+function resolveAccountPlanType(account?: Pick<AccountRow, "plan_type" | "grok_usage_snapshot"> | null): string | undefined {
+  const plan = (account?.plan_type || "").trim();
+  if (plan) return plan;
+  const tier = (account?.grok_usage_snapshot?.subscription_tier || "").trim();
+  return tier || undefined;
 }
 
 function isFutureTime(value?: string): boolean {
@@ -8092,6 +8032,8 @@ function isSubscriptionPlan(planType?: string): boolean {
       "education",
       "k12",
       "go",
+      "super",
+      "heavy",
     ].includes(normalized)
   ) {
     return true;
@@ -8323,6 +8265,11 @@ function OperationProgressToast({
 function formatPlanLabel(planType?: string): string {
   const raw = (planType || "").trim();
   if (!raw) return "-";
+  const normalized = normalizePlanType(raw);
+  // Align with grok.com billing copy
+  if (normalized === "super") return "SuperGrok";
+  if (normalized === "heavy") return "SuperGrok Heavy";
+  if (normalized === "super_lite") return "SuperGrok Lite";
   const lower = raw.toLowerCase();
   if (lower === "prolite" || lower === "pro_lite" || lower === "pro-lite")
     return "ProLite";
@@ -8388,12 +8335,22 @@ function PlanBadge({ planType }: { planType?: string }) {
     plus: "bg-blue-100 text-blue-700 ring-blue-500/30 dark:bg-blue-500/20 dark:text-blue-300 dark:ring-blue-400/30",
     team: "bg-amber-100 text-amber-700 ring-amber-500/30 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-400/30",
     k12: "bg-emerald-100 text-emerald-700 ring-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300 dark:ring-emerald-400/30",
+    // Grok paid tiers: distinct from ChatGPT plus/pro colors
+    super:
+      "bg-cyan-100 text-cyan-800 ring-cyan-500/30 dark:bg-cyan-500/20 dark:text-cyan-200 dark:ring-cyan-400/30",
+    heavy:
+      "bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-500/30 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:ring-fuchsia-400/30",
     free: "bg-zinc-100 text-zinc-500 ring-zinc-400/20 dark:bg-zinc-500/10 dark:text-zinc-400 dark:ring-zinc-400/15",
   };
 
   const normalized = normalizePlanType(planType);
+  // super_lite reuses super color; only super vs heavy need visual split
   const key =
-    normalized === "pro" && label === "ProLite" ? "prolite" : normalized;
+    normalized === "pro" && label === "ProLite"
+      ? "prolite"
+      : normalized === "super_lite"
+        ? "super"
+        : normalized;
   const cls =
     style[key] ||
     "bg-slate-100 text-slate-600 ring-slate-400/20 dark:bg-slate-500/15 dark:text-slate-300 dark:ring-slate-400/20";
@@ -8414,6 +8371,8 @@ function getDefaultScoreBias(planType?: string): number {
     case "plus":
     case "team":
     case "k12":
+    case "super":
+    case "heavy":
       return 50;
     default:
       return 0;
@@ -8792,8 +8751,6 @@ function AccountMobileCard({
   onGenerateAuthJson,
   onToggleEnabled,
   onToggleLock,
-  onResetStatus,
-  onResetCredits,
   onDelete,
   onUsageRefreshed,
 }: {
@@ -8816,8 +8773,6 @@ function AccountMobileCard({
   onGenerateAuthJson: () => void;
   onToggleEnabled: () => void;
   onToggleLock: () => void;
-  onResetStatus: () => void;
-  onResetCredits: () => void;
   onDelete: () => void;
   onUsageRefreshed?: () => void;
 }) {
@@ -8834,7 +8789,6 @@ function AccountMobileCard({
   const isPersonal = variant === "personal";
   const avatarInitial = (displayName.trim()[0] || "?").toUpperCase();
   const chatgptAccountId = account.chatgpt_account_id?.trim() ?? "";
-  const resetCredits = account.rate_limit_reset_credits ?? 0;
   const hasStateBadges =
     account.at_only ||
     account.openai_responses_api ||
@@ -8864,20 +8818,6 @@ function AccountMobileCard({
             <div className="flex size-12 items-center justify-center rounded-lg bg-sky-50 text-lg font-semibold text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-950/70 dark:text-sky-300 dark:ring-sky-800">
               {avatarInitial}
             </div>
-            {resetCredits > 0 && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUsage();
-                }}
-                className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20 transition-colors hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300 dark:ring-amber-400/20 dark:hover:bg-amber-900"
-                title={t("accounts.resetCreditsBadge", { count: resetCredits })}
-              >
-                <RotateCcw className="size-2.5" />
-                {resetCredits}
-              </button>
-            )}
           </div>
 
           <div className="min-w-0 flex-1">
@@ -8885,11 +8825,11 @@ function AccountMobileCard({
               <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-mono font-semibold text-muted-foreground">
                 #{sequence}
               </span>
-              <PlanBadge planType={account.plan_type} />
+              <PlanBadge planType={resolveAccountPlanType(account)} />
               <AccountStatusCountdown account={account} />
               <ExpiryBadge
                 expiresAt={account.subscription_expires_at}
-                planType={account.plan_type}
+                planType={resolveAccountPlanType(account)}
               />
               {showEmailDomainTags && getAccountEmailDomain(account) && (
                 <EmailDomainBadge domain={getAccountEmailDomain(account)} t={t} />
@@ -9171,19 +9111,6 @@ function AccountMobileCard({
               }
             />
             <AccountMobileActionButton
-              title={t("accounts.resetStatusHint")}
-              label={t("accounts.resetStatus")}
-              onClick={onResetStatus}
-              icon={<RotateCcw className="size-3.5" />}
-            />
-            <AccountMobileActionButton
-              title={t("accounts.resetCreditsButton")}
-              label={t("accounts.resetCreditsButton")}
-              disabled={resetCredits <= 0}
-              onClick={onResetCredits}
-              icon={<Timer className="size-3.5" />}
-            />
-            <AccountMobileActionButton
               title={t("accounts.deleteAccount")}
               label={t("accounts.deleteAccount")}
               variant="destructive"
@@ -9217,10 +9144,10 @@ function AccountMobileCard({
                   <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-mono font-semibold text-muted-foreground">
                     #{sequence}
                   </span>
-                  <PlanBadge planType={account.plan_type} />
+                  <PlanBadge planType={resolveAccountPlanType(account)} />
                   <ExpiryBadge
                     expiresAt={account.subscription_expires_at}
-                    planType={account.plan_type}
+                    planType={resolveAccountPlanType(account)}
                   />
                   {showEmailDomainTags && getAccountEmailDomain(account) && (
                     <EmailDomainBadge
@@ -9304,10 +9231,7 @@ function AccountMobileCard({
               concurrency: account.dynamic_concurrency_limit ?? "-",
             })}
           </div>
-          <div className="mt-1.5 space-y-0.5">
-            <div className="text-[10px] text-muted-foreground/70">
-              {t("accounts.healthBarLabel")}
-            </div>
+          <div className="mt-1.5">
             <AccountHealthBar buckets={healthBuckets} />
           </div>
         </div>
@@ -9455,17 +9379,6 @@ function AccountMobileCard({
               <Unlock className="size-3.5" />
             )
           }
-        />
-        <AccountMobileActionButton
-          title={t("accounts.resetStatusHint")}
-          onClick={onResetStatus}
-          icon={<RotateCcw className="size-3.5" />}
-        />
-        <AccountMobileActionButton
-          title={t("accounts.resetCreditsButton")}
-          disabled={(account.rate_limit_reset_credits ?? 0) <= 0}
-          onClick={onResetCredits}
-          icon={<Timer className="size-3.5" />}
         />
         <AccountMobileActionButton
           title={t("accounts.deleteAccount")}

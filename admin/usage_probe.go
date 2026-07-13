@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/codex2api/auth"
@@ -69,6 +71,46 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 		BaseURL:    baseURL,
 		Token:      accessToken,
 	}
+	// 本地/测试 mock：BaseURL 为 loopback 时 billing/subscriptions 也走同一 origin，避免被改写到 grok.com
+	if u, err := url.Parse(baseURL); err == nil {
+		host := u.Hostname()
+		if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+			client.BillingBaseURL = u.Scheme + "://" + u.Host
+		}
+	}
+
+	// 1) 优先 grok.com /rest/subscriptions（账单页 SuperGrok 权威源）。
+	// Bearer 与 billing 相同；401/403 不视为「无套餐」，不覆盖已有 plan_type。
+	// 成功写入后即使后续 /responses 402 也不得清掉 plan。
+	planFromSubscriptions := false
+	subResult, subErr := client.FetchSubscriptions(ctx)
+	if subErr != nil {
+		if subResult != nil && subResult.AuthFailed {
+			log.Printf("[账号 %d] Grok /rest/subscriptions 鉴权失败(status=%d)，保留已有 plan_type: %v",
+				accountID, subResult.HTTPStatus, subErr)
+		} else {
+			log.Printf("[账号 %d] Grok /rest/subscriptions 拉取失败: %v", accountID, subErr)
+		}
+	} else if subResult != nil && subResult.PlanKey != "" {
+		// PlanKey 非空才写库：含 free（合法空列表）；401/未观测 PlanKey 为空不写。
+		credentials := map[string]interface{}{
+			"plan_type": subResult.PlanKey,
+		}
+		rawTier := subResult.Subscription.RawTier()
+		if rawTier != "" {
+			credentials["subscription_tier"] = rawTier
+		}
+		if end := strings.TrimSpace(subResult.Subscription.BillingPeriodEnd); end != "" {
+			credentials["subscription_expires_at"] = end
+		}
+		if updateErr := h.db.UpdateCredentials(ctx, accountID, credentials); updateErr != nil {
+			log.Printf("[账号 %d] 保存 Grok 订阅套餐失败: %v", accountID, updateErr)
+		} else {
+			planFromSubscriptions = true
+			h.store.UpdateAccountPlanType(account, subResult.PlanKey)
+			log.Printf("[账号 %d] Grok 订阅套餐 plan=%s raw=%s", accountID, subResult.PlanKey, rawTier)
+		}
+	}
 
 	billingResult, billingErr := client.FetchCreditsConfig(ctx)
 	if billingResult != nil {
@@ -83,9 +125,10 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 		}
 	}
 	if billingErr == nil && billingResult != nil && billingResult.Snapshot.State == grokquota.StateObserved {
+		// billing 成功只记录健康分样本；不 ClearError / ClearCooldown，也不短路。
+		// 必须继续执行 /responses 探针来校验可调度性。
 		h.store.ReportRequestSuccess(account, 0)
-		h.store.ClearCooldown(account)
-		return nil
+		// 继续走 headerResult / FetchQuotaSnapshot
 	}
 	if billingResult != nil {
 		switch billingResult.Snapshot.State {
@@ -104,10 +147,28 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 
 	headerResult, headerErr := client.FetchQuotaSnapshot(ctx)
 	if headerResult != nil {
-		if updateErr := h.db.UpdateCredentials(ctx, accountID, map[string]interface{}{
+		// header 观测仍落库；套餐仅在订阅未成功时作降级写入（不覆盖 subscriptions 权威源）。
+		credentials := map[string]interface{}{
 			grokquota.CredentialsKeyHeaderObservation: headerResult.Snapshot,
-		}); updateErr != nil {
+		}
+		tier, entitlement := grokquota.SubscriptionFieldsFromSnapshot(&headerResult.Snapshot)
+		if !planFromSubscriptions && tier != "" {
+			credentials["subscription_tier"] = tier
+			if planKey := grokquota.MapSubscriptionTierToPlanKey(tier); planKey != "" {
+				credentials["plan_type"] = planKey
+			}
+		}
+		if entitlement != "" {
+			credentials["entitlement_status"] = entitlement
+		}
+		if updateErr := h.db.UpdateCredentials(ctx, accountID, credentials); updateErr != nil {
 			log.Printf("[账号 %d] 保存 Grok header 观测状态失败: %v", accountID, updateErr)
+		}
+		if !planFromSubscriptions && tier != "" {
+			if planKey := grokquota.MapSubscriptionTierToPlanKey(tier); planKey != "" {
+				// 同步内存 PlanType + 调度索引；DB plan_type 已在上方写入，重复写仅在变更时发生
+				h.store.UpdateAccountPlanType(account, planKey)
+			}
 		}
 	}
 	if headerErr != nil {
@@ -134,7 +195,7 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 					log.Printf("[账号 %d] Grok quota header 探针检测到 bad-credentials，已成功刷新 Access Token", accountID)
 					return nil
 				}
-				h.store.MarkError(account, "Grok quota header 探针返回无权限")
+				h.store.MarkError(account, fmt.Sprintf("Grok quota header 探针返回无权限: %s", truncate(string(body), 300)))
 			case grokquota.StateRateLimited:
 				h.store.ReportRequestFailure(account, "client", 0)
 			case grokquota.StateUnavailable:
