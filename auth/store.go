@@ -934,6 +934,18 @@ func (a *Account) expiryUrgencyBonusLocked(now time.Time) float64 {
 	return 0
 }
 
+// subscriptionExpiredLocked: 有订阅截止时间 + 非 free/api + now >= expires
+func (a *Account) subscriptionExpiredLocked(now time.Time) bool {
+	if a.SubscriptionExpiresAt.IsZero() {
+		return false
+	}
+	plan := strings.ToLower(strings.TrimSpace(a.PlanType))
+	if plan == "" || plan == "free" || plan == "api" {
+		return false
+	}
+	return !now.Before(a.SubscriptionExpiresAt)
+}
+
 func (a *Account) recomputeSchedulerLocked(baseLimit int64) {
 	now := time.Now()
 	breakdown := a.schedulerBreakdownLocked(now)
@@ -1040,6 +1052,9 @@ func (a *Account) IsAvailable() bool {
 	}
 	now := time.Now()
 	if a.quotaAutoPausedLocked(now) {
+		return false
+	}
+	if a.subscriptionExpiredLocked(now) {
 		return false
 	}
 	// 冷却期过了自动恢复
@@ -1449,6 +1464,9 @@ func (a *Account) RuntimeStatus() string {
 			if a.quotaAutoPausedLocked(now) {
 				return "quota_paused"
 			}
+			if a.subscriptionExpiredLocked(now) {
+				return "subscription_expired"
+			}
 			return "active" // 冷却过期，已恢复
 		}
 		if a.RefreshToken != "" {
@@ -1460,6 +1478,9 @@ func (a *Account) RuntimeStatus() string {
 			return "quota_paused"
 		}
 		if a.hasDispatchCredentialLocked() {
+			if a.subscriptionExpiredLocked(now) {
+				return "subscription_expired"
+			}
 			return "active"
 		}
 		if a.RefreshToken != "" && a.ErrorMsg == "" {

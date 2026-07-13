@@ -136,13 +136,15 @@ func (h *Handler) TestConnection(c *gin.Context) {
 					proxy.Apply429Cooldown(h.store, account, errBody, resp, testModel)
 				}
 			default:
-				if shouldMarkBatchTestAccountError(resp.StatusCode, errBody) {
+				if grokquota.IsXAISpendingLimit(resp.StatusCode, errBody) {
+					h.store.MarkCooldownWithError(account, 7*24*time.Hour, "rate_limited", errMsg)
+				} else if shouldMarkBatchTestAccountError(resp.StatusCode, errBody) {
 					h.store.MarkError(account, errMsg)
 				}
 			}
 		}
-		// 429 限流代表账号有效、只是被限流，不计为失败。
-		if isTransient && resp.StatusCode == http.StatusTooManyRequests {
+		// 429 限流 / spending-limit 代表账号有效、只是被限流，不计为失败。
+		if isTransient && (resp.StatusCode == http.StatusTooManyRequests || grokquota.IsXAISpendingLimit(resp.StatusCode, errBody)) {
 			transientOutcome = "rate_limited"
 		}
 		sendTestEvent(c, testEvent{Type: "error", Error: errMsg})
@@ -1004,6 +1006,10 @@ func (h *Handler) runSingleBatchTest(ctx context.Context, acc *auth.Account) (st
 			return h.handleBatchTestReadError(testCtx, acc, readErr)
 		}
 		msg := fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
+		if grokquota.IsXAISpendingLimit(resp.StatusCode, body) {
+			h.store.MarkCooldownWithError(acc, 7*24*time.Hour, "rate_limited", msg)
+			return "rate_limited", msg
+		}
 		if shouldMarkBatchTestAccountError(resp.StatusCode, body) {
 			h.store.MarkError(acc, "批量测试"+msg)
 		}
@@ -1070,7 +1076,11 @@ func (h *Handler) runRecycleBinSingleTest(ctx context.Context, acc *auth.Account
 			}
 			return "failed", readErr.Error()
 		}
-		return "failed", fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
+		msg := fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
+		if grokquota.IsXAISpendingLimit(resp.StatusCode, body) {
+			return "rate_limited", msg
+		}
+		return "failed", msg
 	}
 }
 
@@ -1324,7 +1334,15 @@ func shouldMarkBatchTestAccountError(statusCode int, body []byte) bool {
 		if grokquota.IsXAIInvalidAccessToken(statusCode, body) {
 			return false
 		}
+		// spending-limit 走 rate_limited 冷却，不当作永久错误
+		if grokquota.IsXAISpendingLimit(statusCode, body) {
+			return false
+		}
 		return true
+	}
+	// 402 spending-limit 同样不当 MarkError（由调用方 MarkCooldown）
+	if grokquota.IsXAISpendingLimit(statusCode, body) {
+		return false
 	}
 	if statusCode == http.StatusBadRequest {
 		for _, needle := range []string{

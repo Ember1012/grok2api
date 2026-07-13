@@ -122,6 +122,30 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 		}
 		if updateErr := h.db.UpdateCredentials(ctx, accountID, credentials); updateErr != nil {
 			log.Printf("[账号 %d] 保存 Grok billing 用量状态失败: %v", accountID, updateErr)
+		} else if billingResult.Snapshot.Source == grokquota.SourceGrokBuildBilling && billingResult.Snapshot.State == grokquota.StateObserved {
+			// 同步内存 7d 快照/重置点（仅 weekly；不写 5h）。
+			var pct *float64
+			if billingResult.Snapshot.UsedPercent != nil {
+				pct = billingResult.Snapshot.UsedPercent
+			} else if billingResult.Snapshot.APIUsedPercent != nil {
+				pct = billingResult.Snapshot.APIUsedPercent
+			}
+			if pct != nil {
+				fetchedAt := time.Now().UTC()
+				if ts := strings.TrimSpace(billingResult.Snapshot.FetchedAt); ts != "" {
+					if t, err := time.Parse(time.RFC3339, ts); err == nil {
+						fetchedAt = t
+					}
+				}
+				account.SetUsageSnapshot(*pct, fetchedAt)
+				if billingResult.Snapshot.Window != nil {
+					if resetRaw := strings.TrimSpace(billingResult.Snapshot.Window.ResetAt); resetRaw != "" {
+						if resetAt, err := time.Parse(time.RFC3339, resetRaw); err == nil {
+							account.SetReset7dAt(resetAt)
+						}
+					}
+				}
+			}
 		}
 	}
 	if billingErr == nil && billingResult != nil && billingResult.Snapshot.State == grokquota.StateObserved {
@@ -137,6 +161,16 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 			h.store.MarkCooldownWithError(account, 24*time.Hour, "unauthorized", "Grok billing 用量接口返回未授权")
 			return billingErr
 		case grokquota.StateForbidden:
+			status := billingResult.Snapshot.UpstreamStatusCode
+			if status == 0 {
+				status = 403
+			}
+			if grokquota.IsXAISpendingLimit(status, billingResult.RawBody) {
+				msg := fmt.Sprintf("Grok billing 用量接口额度用尽: %s", truncate(string(billingResult.RawBody), 300))
+				h.store.ReportRequestFailure(account, "client", 0)
+				h.store.MarkCooldownWithError(account, 7*24*time.Hour, "rate_limited", msg)
+				return billingErr
+			}
 			h.store.MarkError(account, "Grok billing 用量接口返回无权限")
 			return billingErr
 		case grokquota.StateRateLimited:
@@ -180,7 +214,11 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 			case grokquota.StateForbidden:
 				// 精确识别 bad-credentials，优先尝试安全刷新一次（最多一次，由 Store 锁保证）
 				body := headerResult.RawBody
-				if grokquota.IsXAIInvalidAccessToken(403, body) {
+				status := headerResult.Snapshot.UpstreamStatusCode
+				if status == 0 {
+					status = 403
+				}
+				if grokquota.IsXAIInvalidAccessToken(status, body) {
 					if recErr := h.store.RefreshAccountAfterAuthFailure(ctx, account, accessToken); recErr != nil {
 						if recErr == auth.ErrRefreshTokenMissing {
 							h.store.MarkError(account, "Grok quota header 探针返回无权限（缺少 refresh_token，需要重新授权）")
@@ -194,6 +232,13 @@ func (h *Handler) probeGrokQuotaUsage(ctx context.Context, account *auth.Account
 					h.store.ClearCooldown(account)
 					log.Printf("[账号 %d] Grok quota header 探针检测到 bad-credentials，已成功刷新 Access Token", accountID)
 					return nil
+				}
+				// spending/pending-limit 是额度耗尽，标 rate_limited，勿 MarkError
+				if grokquota.IsXAISpendingLimit(status, body) {
+					msg := fmt.Sprintf("Grok quota header 探针额度用尽: %s", truncate(string(body), 300))
+					h.store.ReportRequestFailure(account, "client", 0)
+					h.store.MarkCooldownWithError(account, 7*24*time.Hour, "rate_limited", msg)
+					return headerErr
 				}
 				h.store.MarkError(account, fmt.Sprintf("Grok quota header 探针返回无权限: %s", truncate(string(body), 300)))
 			case grokquota.StateRateLimited:
@@ -300,6 +345,12 @@ func (h *Handler) probeUsageViaResponses(ctx context.Context, account *auth.Acco
 		if proxy.IsUsageLimitReachedError(body) {
 			h.store.ReportRequestFailure(account, "client", 0)
 			proxy.Apply429Cooldown(h.store, account, body, resp, h.store.GetTestModel())
+			return nil
+		}
+		if grokquota.IsXAISpendingLimit(resp.StatusCode, body) {
+			msg := fmt.Sprintf("用量探针上游返回 %d: %s", resp.StatusCode, truncate(string(body), 300))
+			h.store.ReportRequestFailure(account, "client", 0)
+			h.store.MarkCooldownWithError(account, 7*24*time.Hour, "rate_limited", msg)
 			return nil
 		}
 		if shouldMarkUsageProbeAccountError(resp.StatusCode, body) {

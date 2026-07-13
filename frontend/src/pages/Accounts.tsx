@@ -1308,12 +1308,14 @@ export default function Accounts() {
     const abnormalAccounts = accounts.filter(
       (account) =>
         account.status === "unauthorized" ||
-        account.status === "error",
+        account.status === "error" ||
+        account.status === "subscription_expired",
     ).length;
     const rateLimitedExclusive = accounts.filter(
       (account) =>
         account.status !== "unauthorized" &&
         account.status !== "error" &&
+        account.status !== "subscription_expired" &&
         isRateLimitedAccount(account),
     ).length;
     const normalAccounts = accounts.length - abnormalAccounts - rateLimitedExclusive;
@@ -1398,6 +1400,7 @@ export default function Accounts() {
           if (
             account.status === "unauthorized" ||
             account.status === "error" ||
+            account.status === "subscription_expired" ||
             isRateLimitedAccount(account)
           )
             return false;
@@ -1405,7 +1408,8 @@ export default function Accounts() {
         case "rate_limited":
           if (
             account.status === "unauthorized" ||
-            account.status === "error"
+            account.status === "error" ||
+            account.status === "subscription_expired"
           )
             return false;
           if (!isRateLimitedAccount(account)) return false;
@@ -1413,7 +1417,8 @@ export default function Accounts() {
         case "abnormal":
           if (
             account.status !== "unauthorized" &&
-            account.status !== "error"
+            account.status !== "error" &&
+            account.status !== "subscription_expired"
           )
             return false;
           break;

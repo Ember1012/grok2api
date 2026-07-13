@@ -910,6 +910,7 @@
     "quota_paused": "自动暂停",
     "unauthorized": "封禁",
     "error": "错误",
+    "subscription_expired": "已过期",
     "refreshing": "刷新中",
     "paused": "已暂停",
     "unknown": "未知"

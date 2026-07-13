@@ -1017,6 +1017,11 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		if billed, ok := billed7d[accounts[i].ID]; ok {
 			accounts[i].Billed7d = &billed
 		}
+		// Grok 常无 store.Reset7dAt，reset 对齐聚合拿不到 billed_7d；回退到近 7d usage 明细。
+		if accounts[i].Billed7d == nil && accounts[i].Usage7dDetail != nil {
+			billed := accounts[i].Usage7dDetail.AccountBilled
+			accounts[i].Billed7d = &billed
+		}
 	}
 
 	c.JSON(http.StatusOK, accountsResponse{Accounts: accounts})

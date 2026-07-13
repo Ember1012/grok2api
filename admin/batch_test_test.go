@@ -27,6 +27,12 @@ func TestShouldMarkBatchTestAccountError(t *testing.T) {
 			want:       true,
 		},
 		{
+			name:       "spending limit forbidden is not account error",
+			statusCode: http.StatusForbidden,
+			body:       []byte(`{"code":"personal-team-blocked:pending-limit","error":"You have run out of credits or need a Grok subscription..."}`),
+			want:       false,
+		},
+		{
 			name:       "payment required deactivated workspace is account scoped",
 			statusCode: http.StatusPaymentRequired,
 			body:       []byte(`{"detail":{"code":"deactivated_workspace"}}`),
@@ -397,5 +403,52 @@ func TestRunSingleBatchTestUnauthorizedRecordsErrorMessage(t *testing.T) {
 	account.Mu().RUnlock()
 	if !strings.Contains(errorMsg, "token_invalidated") {
 		t.Fatalf("ErrorMsg = %q, want token_invalidated", errorMsg)
+	}
+}
+
+func TestRunSingleBatchTestSpendingLimitMarksRateLimited(t *testing.T) {
+	body := `{"code":"personal-team-blocked:pending-limit","error":"You have run out of credits or need a Grok subscription..."}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	store := auth.NewStore(nil, nil, nil)
+	account := &auth.Account{
+		DBID:         1,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		BaseURL:      server.URL,
+		APIKey:       "test-key",
+		Models:       []string{"gpt-4o-mini"},
+		Status:       auth.StatusReady,
+		HealthTier:   auth.HealthTierHealthy,
+	}
+	store.AddAccount(account)
+	handler := &Handler{store: store}
+
+	status, msg := handler.runSingleBatchTest(context.Background(), account)
+	if status != "rate_limited" {
+		t.Fatalf("status = %q, message = %q, want rate_limited", status, msg)
+	}
+	if !strings.Contains(msg, "pending-limit") && !strings.Contains(msg, "run out of credits") {
+		t.Fatalf("message = %q, want spending-limit detail", msg)
+	}
+	if got := account.RuntimeStatus(); got != "rate_limited" {
+		t.Fatalf("RuntimeStatus() = %q, want rate_limited", got)
+	}
+	if account.Status == auth.StatusError {
+		t.Fatal("spending-limit should not MarkError")
+	}
+	reason, until := account.GetCooldownSnapshot()
+	if reason != "rate_limited" || until.IsZero() {
+		t.Fatalf("cooldown = (%q, %s), want active rate_limited cooldown", reason, until)
+	}
+	account.Mu().RLock()
+	errorMsg := account.ErrorMsg
+	account.Mu().RUnlock()
+	if !strings.Contains(errorMsg, "403") {
+		t.Fatalf("ErrorMsg = %q, want preserved upstream message", errorMsg)
 	}
 }

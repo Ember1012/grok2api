@@ -910,6 +910,7 @@
     "quota_paused": "Auto-Paused",
     "unauthorized": "Banned",
     "error": "Error",
+    "subscription_expired": "Expired",
     "refreshing": "Refreshing",
     "paused": "Paused",
     "unknown": "Unknown"

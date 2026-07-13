@@ -1580,6 +1580,56 @@ func TestDeactivatedWorkspace402MarksAccountError(t *testing.T) {
 	}
 }
 
+func TestXAISpendingLimit403MarksRateLimited(t *testing.T) {
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "grok"})
+	account := &auth.Account{DBID: 43, AccessToken: "at"}
+	handler := &Handler{store: store}
+	body := []byte(`{"code":"personal-team-blocked:pending-limit","error":"You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok"}`)
+
+	if got := upstreamErrorKind(http.StatusForbidden, body, codex429Decision{}); got != "rate_limited" {
+		t.Fatalf("upstreamErrorKind = %q, want rate_limited", got)
+	}
+
+	handler.applyCooldownForModel(account, http.StatusForbidden, body, &http.Response{Header: make(http.Header)}, "grok")
+
+	if got := account.RuntimeStatus(); got != "rate_limited" {
+		t.Fatalf("RuntimeStatus() = %q, want rate_limited", got)
+	}
+	account.Mu().RLock()
+	reason := account.CooldownReason
+	until := account.CooldownUtil
+	account.Mu().RUnlock()
+	if reason != "rate_limited" {
+		t.Fatalf("CooldownReason = %q, want rate_limited", reason)
+	}
+	if until.IsZero() || time.Until(until) < 6*24*time.Hour {
+		t.Fatalf("CooldownUtil = %v, want about 7 days", until)
+	}
+}
+
+func TestOrdinary403KeepsPaymentRequired(t *testing.T) {
+	store := auth.NewStore(nil, nil, &database.SystemSettings{MaxConcurrency: 2, TestConcurrency: 1, TestModel: "grok"})
+	account := &auth.Account{DBID: 44, AccessToken: "at"}
+	handler := &Handler{store: store}
+	body := []byte(`{"error":"forbidden"}`)
+
+	if got := upstreamErrorKind(http.StatusForbidden, body, codex429Decision{}); got != "payment_required" {
+		t.Fatalf("upstreamErrorKind = %q, want payment_required", got)
+	}
+
+	handler.applyCooldownForModel(account, http.StatusForbidden, body, &http.Response{Header: make(http.Header)}, "grok")
+
+	if got := account.RuntimeStatus(); got != "payment_required" {
+		t.Fatalf("RuntimeStatus() = %q, want payment_required", got)
+	}
+	account.Mu().RLock()
+	reason := account.CooldownReason
+	account.Mu().RUnlock()
+	if reason != "payment_required" {
+		t.Fatalf("CooldownReason = %q, want payment_required", reason)
+	}
+}
+
 func TestSendFinalUpstreamError_UsageLimitRewrites429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

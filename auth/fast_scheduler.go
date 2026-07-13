@@ -519,6 +519,9 @@ func (a *Account) fastSchedulerSnapshot(baseLimit int64, now time.Time) (Account
 	if a.usageExhaustedLocked() {
 		available = false
 	}
+	if a.subscriptionExpiredLocked(now) {
+		available = false
+	}
 
 	return tier, score, limit, proven, available
 }

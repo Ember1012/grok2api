@@ -21,6 +21,7 @@ import (
 	"github.com/codex2api/cache"
 	"github.com/codex2api/config"
 	"github.com/codex2api/database"
+	"github.com/codex2api/internal/grokquota"
 	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -1375,6 +1376,9 @@ func upstreamErrorKind(statusCode int, body []byte, decision codex429Decision) s
 	case http.StatusPaymentRequired, http.StatusForbidden:
 		if IsDeactivatedWorkspaceError(body) {
 			return "deactivated_workspace"
+		}
+		if grokquota.IsXAISpendingLimit(statusCode, body) {
+			return "rate_limited"
 		}
 		return "payment_required"
 	case http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
@@ -3816,6 +3820,13 @@ func (h *Handler) applyCooldownForModel(account *auth.Account, statusCode int, b
 			log.Printf("账号 %d 工作区已停用，标记为错误", account.ID())
 			if h.store != nil {
 				h.store.MarkError(account, upstreamAccountErrorMessage(statusCode, body))
+			}
+			return codex429Decision{}
+		}
+		if grokquota.IsXAISpendingLimit(statusCode, body) {
+			log.Printf("账号 %d 触发 Grok spending-limit (status=%d)，冷却 7 天 rate_limited", account.ID(), statusCode)
+			if h.store != nil {
+				h.store.MarkCooldown(account, 7*24*time.Hour, "rate_limited")
 			}
 			return codex429Decision{}
 		}

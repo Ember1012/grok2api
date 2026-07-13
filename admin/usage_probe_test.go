@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
@@ -137,6 +138,65 @@ func TestApplyGrokUsageSnapshotBillingWithoutPercentDoesNotProjectWeeklyUsage(t 
 
 // billing capture: /grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig 200 body
 const billingCaptureBase64 = "AAAAAFIKUA0AAHRCEgAaACILCLi3kNIGENiUljQqCwi4rLXSBhDYlJY0OgcIARUAAHRCQhwIAhILCLi3kNIGENiUljQaCwi4rLXSBhDYlJY0WAFiAGgBgAAAAA9ncnBjLXN0YXR1czowDQo="
+
+// TestProbeGrokQuotaUsageSpendingLimitDoesNotMarkError 验证 header/responses 返回
+// pending-limit 403 时标 rate_limited，不把账号打成 error。
+func TestProbeGrokQuotaUsageSpendingLimitDoesNotMarkError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const spendingBody = `{"code":"personal-team-blocked:pending-limit","error":"You have run out of credits or need a Grok subscription."}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/subscriptions":
+			w.WriteHeader(http.StatusNotFound)
+		case "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`billing down`))
+		case "/v1/responses":
+			w.Header().Set("x-request-id", "resp-spending")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(spendingBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	db := newTestAdminDB(t)
+	store := auth.NewStore(db, cache.NewMemory(1), nil)
+	id, err := db.InsertAccountWithCredentials(context.Background(), "probe-spending", map[string]interface{}{
+		"access_token": "tok",
+		"base_url":     server.URL,
+	}, "")
+	if err != nil {
+		t.Fatalf("InsertAccountWithCredentials: %v", err)
+	}
+	if err := db.SetAccountPlatform(context.Background(), id, "grok", auth.UpstreamOpenAIResponses); err != nil {
+		t.Fatalf("SetAccountPlatform: %v", err)
+	}
+	if err := store.LoadAccountByID(context.Background(), id); err != nil {
+		t.Fatalf("LoadAccountByID: %v", err)
+	}
+	acc := store.FindByID(id)
+	if acc == nil {
+		t.Fatalf("runtime account %d not found", id)
+	}
+	// 模拟此前已是 rate_limited，探针不得把它打回 error
+	store.MarkCooldownWithError(acc, 7*24*time.Hour, "rate_limited", "seed rate_limited")
+
+	handler := &Handler{db: db, store: store}
+	_ = handler.probeGrokQuotaUsage(context.Background(), acc)
+
+	if got := acc.RuntimeStatus(); got == "error" {
+		t.Fatalf("RuntimeStatus() = %q, want non-error (spending-limit must not MarkError); ErrorMsg=%q", got, acc.ErrorMsg)
+	}
+	if got := acc.RuntimeStatus(); got != "rate_limited" {
+		t.Fatalf("RuntimeStatus() = %q, want rate_limited; ErrorMsg=%q", got, acc.ErrorMsg)
+	}
+	if acc.ErrorMsg == "" || !containsAny(acc.ErrorMsg, []string{"pending-limit", "额度用尽", "run out of credits"}) {
+		t.Fatalf("ErrorMsg = %q, want spending-limit detail", acc.ErrorMsg)
+	}
+}
 
 func TestProbeGrokQuotaUsageBillingOKResponses403KeepsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)

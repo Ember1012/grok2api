@@ -146,3 +146,71 @@ func TestMarkUsage7dRateLimitedSkipsExpiredResetWindow(t *testing.T) {
 		t.Fatalf("RuntimeStatus() = %q, want active after expired reset", got)
 	}
 }
+
+func TestSubscriptionExpiredPaidPlanNotSchedulable(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	for _, plan := range []string{"plus", "SuperGrok"} {
+		acc := &Account{
+			AccessToken:           "at-test",
+			PlanType:              plan,
+			Status:                StatusReady,
+			SubscriptionExpiresAt: past,
+		}
+		if got := acc.RuntimeStatus(); got != "subscription_expired" {
+			t.Fatalf("plan=%s RuntimeStatus() = %q, want subscription_expired", plan, got)
+		}
+		if acc.IsAvailable() {
+			t.Fatalf("plan=%s IsAvailable() = true, want false", plan)
+		}
+		_, _, _, _, available := acc.fastSchedulerSnapshot(4, time.Now())
+		if available {
+			t.Fatalf("plan=%s fastSchedulerSnapshot available = true, want false", plan)
+		}
+	}
+}
+
+func TestSubscriptionExpiredFreePlanStillAvailable(t *testing.T) {
+	acc := &Account{
+		AccessToken:           "at-test",
+		PlanType:              "free",
+		Status:                StatusReady,
+		SubscriptionExpiresAt: time.Now().Add(-time.Hour),
+	}
+	if got := acc.RuntimeStatus(); got != "active" {
+		t.Fatalf("RuntimeStatus() = %q, want active for free plan", got)
+	}
+	if !acc.IsAvailable() {
+		t.Fatal("IsAvailable() = false, want true for free plan")
+	}
+}
+
+func TestSubscriptionFutureExpiryStillActive(t *testing.T) {
+	acc := &Account{
+		AccessToken:           "at-test",
+		PlanType:              "plus",
+		Status:                StatusReady,
+		SubscriptionExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if got := acc.RuntimeStatus(); got != "active" {
+		t.Fatalf("RuntimeStatus() = %q, want active for future expiry", got)
+	}
+	if !acc.IsAvailable() {
+		t.Fatal("IsAvailable() = false, want true for future expiry")
+	}
+}
+
+func TestSubscriptionExpiredDefersToStatusError(t *testing.T) {
+	acc := &Account{
+		AccessToken:           "at-test",
+		PlanType:              "plus",
+		Status:                StatusError,
+		ErrorMsg:              "boom",
+		SubscriptionExpiresAt: time.Now().Add(-time.Hour),
+	}
+	if got := acc.RuntimeStatus(); got != "error" {
+		t.Fatalf("RuntimeStatus() = %q, want error over subscription_expired", got)
+	}
+	if acc.IsAvailable() {
+		t.Fatal("IsAvailable() = true, want false for StatusError")
+	}
+}
