@@ -94,6 +94,70 @@ const serializeModelMappingEntries = (entries: ModelMappingEntry[]) => {
   return JSON.stringify(obj)
 }
 
+type ModelPricingEntry = { model: string; input: number; output: number; cache_read: number }
+const EMPTY_MODEL_PRICING_ENTRIES: ModelPricingEntry[] = []
+
+const parseModelPricingDefaults = (defaults: string): ModelPricingEntry[] => {
+  try {
+    const parsed = JSON.parse(defaults || '{}') as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return EMPTY_MODEL_PRICING_ENTRIES
+    }
+    return Object.entries(parsed as Record<string, unknown>).map(([model, raw]) => {
+      const row = raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {}
+      return {
+        model,
+        input: typeof row.input === 'number' ? row.input : Number(row.input) || 0,
+        output: typeof row.output === 'number' ? row.output : Number(row.output) || 0,
+        cache_read: typeof row.cache_read === 'number' ? row.cache_read : Number(row.cache_read) || 0,
+      }
+    })
+  } catch {
+    return EMPTY_MODEL_PRICING_ENTRIES
+  }
+}
+
+const parseModelPricingEntries = (value: string, defaults = ''): ModelPricingEntry[] => {
+  try {
+    const raw = (value || '').trim()
+    const parsed = JSON.parse(raw || '{}') as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return parseModelPricingDefaults(defaults)
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>).map(([model, rowRaw]) => {
+      const row = rowRaw && typeof rowRaw === 'object' && !Array.isArray(rowRaw)
+        ? (rowRaw as Record<string, unknown>)
+        : {}
+      return {
+        model,
+        input: typeof row.input === 'number' ? row.input : Number(row.input) || 0,
+        output: typeof row.output === 'number' ? row.output : Number(row.output) || 0,
+        cache_read: typeof row.cache_read === 'number' ? row.cache_read : Number(row.cache_read) || 0,
+      }
+    })
+    // value 为空或 {} 时用 defaults 预填 UI，不在 mount 时写回
+    return entries.length > 0 ? entries : parseModelPricingDefaults(defaults)
+  } catch {
+    return parseModelPricingDefaults(defaults)
+  }
+}
+
+const serializeModelPricingEntries = (entries: ModelPricingEntry[]) => {
+  const obj: Record<string, { input: number; output: number; cache_read: number }> = {}
+  for (const entry of entries) {
+    const model = entry.model.trim()
+    if (!model) continue
+    obj[model] = {
+      input: Number.isFinite(entry.input) ? entry.input : 0,
+      output: Number.isFinite(entry.output) ? entry.output : 0,
+      cache_read: Number.isFinite(entry.cache_read) ? entry.cache_read : 0,
+    }
+  }
+  return JSON.stringify(obj)
+}
+
 const normalizeReasoningEffortValue = (effort: string) => {
   const value = effort.trim().toLowerCase()
   if (value === 'max') return 'xhigh'
@@ -400,6 +464,120 @@ function ModelMappingEditor({
       </div>
       <Button type="button" variant="outline" size="sm" className="self-start" onClick={handleAdd}>
         + {t('settings2.addMapping')}
+      </Button>
+    </div>
+  )
+}
+
+function ModelPricingEditor({
+  value,
+  defaults = '',
+  onChange,
+  modelOptions,
+}: {
+  value: string
+  defaults?: string
+  onChange: (v: string) => void
+  modelOptions?: Array<{ label: string; value: string }>
+}) {
+  const { t } = useTranslation()
+  const listId = 'model-pricing-model-options'
+  const [entries, setEntries] = useState<ModelPricingEntry[]>(() => parseModelPricingEntries(value, defaults))
+  const lastEmittedValueRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (value === lastEmittedValueRef.current) return
+    setEntries(parseModelPricingEntries(value, defaults))
+  }, [defaults, value])
+
+  const updateEntries = (next: ModelPricingEntry[]) => {
+    setEntries(next)
+    const serialized = serializeModelPricingEntries(next)
+    lastEmittedValueRef.current = serialized
+    onChange(serialized)
+  }
+
+  const handleChange = (index: number, patch: Partial<ModelPricingEntry>) => {
+    updateEntries(entries.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))
+  }
+
+  const handleRemove = (index: number) => {
+    updateEntries(entries.filter((_, i) => i !== index))
+  }
+
+  const handleAdd = () => {
+    updateEntries([...entries, { model: modelOptions?.[0]?.value ?? '', input: 0, output: 0, cache_read: 0 }])
+  }
+
+  const parsePrice = (raw: string) => {
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <p className="text-xs text-muted-foreground">{t('settings.modelPricingUnitHint')}</p>
+      <div className="grid shrink-0 grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] gap-1.5 px-1 text-xs font-semibold text-muted-foreground">
+        <span>{t('settings.modelPricingModel')}</span>
+        <span>{t('settings.modelPricingInput')}</span>
+        <span>{t('settings.modelPricingOutput')}</span>
+        <span>{t('settings.modelPricingCacheRead')}</span>
+        <span />
+      </div>
+      {modelOptions && modelOptions.length > 0 ? (
+        <datalist id={listId}>
+          {modelOptions.map((option) => (
+            <option key={option.value} value={option.value} label={option.label} />
+          ))}
+        </datalist>
+      ) : null}
+      <div className="min-h-[180px] flex-1 space-y-1.5 overflow-y-auto pr-1">
+        {entries.map((entry, i) => (
+          <div key={i} className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2rem] items-center gap-1.5">
+            <Input
+              className="h-8 px-2 font-mono text-xs"
+              list={modelOptions && modelOptions.length > 0 ? listId : undefined}
+              placeholder="grok-4.3"
+              value={entry.model}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => handleChange(i, { model: e.target.value })}
+            />
+            <Input
+              type="number"
+              step="any"
+              min={0}
+              className="h-8 px-2 font-mono text-xs"
+              value={entry.input}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => handleChange(i, { input: parsePrice(e.target.value) })}
+            />
+            <Input
+              type="number"
+              step="any"
+              min={0}
+              className="h-8 px-2 font-mono text-xs"
+              value={entry.output}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => handleChange(i, { output: parsePrice(e.target.value) })}
+            />
+            <Input
+              type="number"
+              step="any"
+              min={0}
+              className="h-8 px-2 font-mono text-xs"
+              value={entry.cache_read}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => handleChange(i, { cache_read: parsePrice(e.target.value) })}
+            />
+            <button
+              type="button"
+              onClick={() => handleRemove(i)}
+              aria-label={t('common.delete')}
+              className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <Button type="button" variant="outline" size="sm" className="self-start" onClick={handleAdd}>
+        + {t('settings.modelPricingAdd')}
       </Button>
     </div>
   )
@@ -830,6 +1008,8 @@ export default function Settings() {
     model_mapping: '{}',
     codex_model_mapping: '{}',
     reasoning_effort_models: '[]',
+    model_pricing: '{}',
+    model_pricing_defaults: '',
     resin_url: '',
     resin_platform_name: '',
     prompt_filter_enabled: false,
@@ -888,6 +1068,9 @@ export default function Settings() {
   const [modelsLastSyncedAt, setModelsLastSyncedAt] = useState<string | undefined>()
   const [modelsSourceURL, setModelsSourceURL] = useState('')
   const [syncingModels, setSyncingModels] = useState(false)
+  const [newModelId, setNewModelId] = useState('')
+  const [addingModel, setAddingModel] = useState(false)
+  const [deletingModelId, setDeletingModelId] = useState<string | null>(null)
   const logoFileInputRef = useRef<HTMLInputElement>(null)
   const backgroundFileInputRef = useRef<HTMLInputElement>(null)
   const persistedBrandingRef = useRef<Partial<SiteBranding> | null>(null)
@@ -1209,6 +1392,38 @@ export default function Settings() {
       showToast(`${t('settings.modelsSyncFailed')}: ${getErrorMessage(error)}`, 'error')
     } finally {
       setSyncingModels(false)
+    }
+  }
+
+  const handleAddModel = async () => {
+    const id = newModelId.trim()
+    if (!id || addingModel || deletingModelId) return
+    setAddingModel(true)
+    try {
+      const result = await api.addModel({ id })
+      setModelList(result.models ?? [])
+      setModelItems(result.items ?? [])
+      setNewModelId('')
+      showToast(t('settings.addModelSuccess'))
+    } catch (error) {
+      showToast(`${t('settings.addModelFailed')}: ${getErrorMessage(error)}`, 'error')
+    } finally {
+      setAddingModel(false)
+    }
+  }
+
+  const handleDeleteModel = async (id: string) => {
+    if (addingModel || deletingModelId) return
+    setDeletingModelId(id)
+    try {
+      const result = await api.deleteModel(id)
+      setModelList(result.models ?? [])
+      setModelItems(result.items ?? [])
+      showToast(t('settings.deleteModelSuccess'))
+    } catch (error) {
+      showToast(`${t('settings.deleteModelFailed')}: ${getErrorMessage(error)}`, 'error')
+    } finally {
+      setDeletingModelId(null)
     }
   }
 
@@ -2306,23 +2521,81 @@ export default function Settings() {
                     {syncingModels ? t('settings.modelsSyncing') : t('settings.syncUpstreamModels')}
                   </Button>
                 </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Input
+                    value={newModelId}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setNewModelId(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void handleAddModel()
+                      }
+                    }}
+                    placeholder={t('settings.addModelPlaceholder')}
+                    className="min-w-0 flex-1"
+                    disabled={addingModel || !!deletingModelId}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => void handleAddModel()}
+                    disabled={!newModelId.trim() || addingModel || !!deletingModelId}
+                  >
+                    {addingModel ? t('settings.addingModel') : t('settings.addModel')}
+                  </Button>
+                </div>
                 <div className="flex min-h-0 flex-1 flex-wrap content-start gap-2 overflow-auto rounded-lg border border-border bg-muted/20 p-3">
                   {visibleModelItems.map((model) => (
                     <div key={model.id} className="flex h-fit flex-wrap items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5">
                       <span className="font-mono text-xs font-semibold text-foreground">{model.id}</span>
-                      <Badge variant={model.source === 'official_codex_docs' ? 'default' : 'secondary'} className="text-[11px]">
-                        {model.source === 'official_codex_docs'
+                      <Badge
+                        variant={
+                          model.source === 'official_grok_docs' || model.source === 'manual'
+                            ? 'default'
+                            : 'secondary'
+                        }
+                        className="text-[11px]"
+                      >
+                        {model.source === 'official_grok_docs'
                           ? t('settings.modelSourceOfficial')
-                          : model.source === 'reasoning_effort'
-                            ? t('settings.modelSourceReasoning')
-                            : t('settings.modelSourceBuiltin')}
+                          : model.source === 'manual'
+                            ? t('settings.modelSourceManual')
+                            : model.source === 'reasoning_effort'
+                              ? t('settings.modelSourceReasoning')
+                              : t('settings.modelSourceBuiltin')}
                       </Badge>
                       {model.pro_only ? <Badge variant="outline" className="text-[11px]">{t('settings.modelProOnly')}</Badge> : null}
                       {model.category === 'image' ? <Badge variant="outline" className="text-[11px]">{t('settings.modelImage')}</Badge> : null}
+                      {model.source === 'manual' ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-6 p-0"
+                          aria-label={t('settings.deleteModel')}
+                          disabled={addingModel || !!deletingModelId}
+                          onClick={() => void handleDeleteModel(model.id)}
+                        >
+                          <X className={cn('size-3.5', deletingModelId === model.id && 'animate-spin')} />
+                        </Button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
               </div>
+            </SettingsCard>
+
+            <SettingsCard
+              title={t('settings.modelPricing')}
+              description={t('settings.modelPricingDesc')}
+              className="h-full xl:h-[430px]"
+              contentClassName="flex h-full min-h-0 flex-col"
+            >
+              <ModelPricingEditor
+                value={settingsForm.model_pricing}
+                defaults={settingsForm.model_pricing_defaults ?? ''}
+                onChange={(v) => setSettingsForm((f) => ({ ...f, model_pricing: v }))}
+                modelOptions={modelItems.map((model) => ({ label: model.id, value: model.id }))}
+              />
             </SettingsCard>
 
             <SettingsCard

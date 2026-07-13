@@ -516,6 +516,10 @@ export const api = {
   getPromptFilterRules: () =>
     request<PromptFilterRulesResponse>('/prompt-filter/rules'),
   getModels: () => request<ModelsResponse>('/models'),
+  addModel: (data: { id: string; category?: string }) =>
+    request<ModelsResponse>('/models', { method: 'POST', body: JSON.stringify(data) }),
+  deleteModel: (id: string) =>
+    request<ModelsResponse>(`/models/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   syncModels: () => request<ModelSyncResponse>('/models/sync', { method: 'POST' }),
   batchTestAccounts: (ids?: number[]) =>
     request<{ total: number; success: number; failed: number; banned: number; rate_limited: number }>('/accounts/batch-test', {

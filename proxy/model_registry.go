@@ -24,6 +24,7 @@ const (
 	ModelSourceBuiltin          = "builtin"
 	ModelSourceOfficialGrokDocs = "official_grok_docs"
 	ModelSourceReasoningEffort  = "reasoning_effort"
+	ModelSourceManual           = "manual"
 )
 
 // ModelInfo describes one model exposed by this proxy.
@@ -117,7 +118,7 @@ func modelInfoFromRow(row database.ModelRegistryRow) ModelInfo {
 		ID:                  row.ID,
 		Enabled:             row.Enabled,
 		Category:            valueOrDefault(row.Category, ModelCategoryText),
-		Source:              valueOrDefault(row.Source, "manual"),
+		Source:              valueOrDefault(row.Source, ModelSourceManual),
 		Capabilities:        capabilitiesForModelID(row.ID),
 		ProOnly:             row.ProOnly,
 		APIKeyAuthAvailable: row.APIKeyAuthAvailable,
@@ -131,7 +132,7 @@ func modelInfoToRow(info ModelInfo, lastSeenAt time.Time) database.ModelRegistry
 		ID:                  info.ID,
 		Enabled:             info.Enabled,
 		Category:            valueOrDefault(info.Category, ModelCategoryText),
-		Source:              valueOrDefault(info.Source, "manual"),
+		Source:              valueOrDefault(info.Source, ModelSourceManual),
 		ProOnly:             info.ProOnly,
 		APIKeyAuthAvailable: info.APIKeyAuthAvailable,
 		LastSeenAt:          sql.NullTime{Time: lastSeenAt.UTC(), Valid: !lastSeenAt.IsZero()},
@@ -445,7 +446,96 @@ func ApplyOfficialGrokModelSync(ctx context.Context, db *database.DB, html strin
 func modelRegistryMetadataEqual(a database.ModelRegistryRow, b database.ModelRegistryRow) bool {
 	return a.Enabled == b.Enabled &&
 		valueOrDefault(a.Category, ModelCategoryText) == valueOrDefault(b.Category, ModelCategoryText) &&
-		valueOrDefault(a.Source, "manual") == valueOrDefault(b.Source, "manual") &&
+		valueOrDefault(a.Source, ModelSourceManual) == valueOrDefault(b.Source, ModelSourceManual) &&
 		a.ProOnly == b.ProOnly &&
 		a.APIKeyAuthAvailable == b.APIKeyAuthAvailable
+}
+
+// AddManualModel inserts a user-defined Grok model into the registry.
+func AddManualModel(ctx context.Context, db *database.DB, id, category string) (*ModelCatalog, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("模型 ID 不能为空")
+	}
+	if !isGrokModelID(id) {
+		return nil, fmt.Errorf("仅支持 grok / grok-latest / grok-* 模型 ID")
+	}
+	if db == nil {
+		return nil, fmt.Errorf("数据库不可用，无法添加模型")
+	}
+
+	for _, info := range builtinModelInfos {
+		if info.ID == id {
+			return nil, fmt.Errorf("模型 %s 已存在于内置列表", id)
+		}
+	}
+	existing, err := db.GetModelRegistryRow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, fmt.Errorf("模型 %s 已存在", id)
+	}
+
+	category = strings.TrimSpace(strings.ToLower(category))
+	switch category {
+	case "":
+		if strings.Contains(strings.ToLower(id), "image") {
+			category = ModelCategoryImage
+		} else {
+			category = ModelCategoryText
+		}
+	case ModelCategoryText, ModelCategoryImage:
+	default:
+		return nil, fmt.Errorf("category 仅支持 text 或 image")
+	}
+
+	info := modelInfoForID(id, ModelSourceManual)
+	info.Enabled = true
+	info.Category = category
+	if err := db.UpsertModelRegistryRows(ctx, []database.ModelRegistryRow{modelInfoToRow(info, time.Time{})}); err != nil {
+		return nil, err
+	}
+	catalog, err := ListModelCatalog(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return &catalog, nil
+}
+
+// RemoveManualModel deletes a manually added model from the registry.
+func RemoveManualModel(ctx context.Context, db *database.DB, id string) (*ModelCatalog, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("模型 ID 不能为空")
+	}
+	if db == nil {
+		return nil, fmt.Errorf("数据库不可用，无法删除模型")
+	}
+
+	for _, info := range builtinModelInfos {
+		if info.ID == id {
+			return nil, fmt.Errorf("内置模型不可删除")
+		}
+	}
+
+	row, err := db.GetModelRegistryRow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, fmt.Errorf("模型 %s 不存在", id)
+	}
+	source := valueOrDefault(row.Source, ModelSourceManual)
+	if source != ModelSourceManual {
+		return nil, fmt.Errorf("仅可删除手动添加的模型")
+	}
+	if err := db.DeleteModelRegistryRow(ctx, id); err != nil {
+		return nil, err
+	}
+	catalog, err := ListModelCatalog(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return &catalog, nil
 }

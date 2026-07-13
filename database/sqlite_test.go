@@ -1130,6 +1130,7 @@ func TestSQLiteSystemSettingsPersistsFirstTokenTimeoutSeconds(t *testing.T) {
 		MaxRetries:                       2,
 		MaxRateLimitRetries:              1,
 		ModelMapping:                     "{}",
+		ModelPricing:                     `{"grok-4.3":{"input":1.25,"output":2.5,"cache_read":0.2}}`,
 		CodexModelMapping:                `{"gpt-5.2":"gpt-5.5"}`,
 		ReasoningEffortModels:            `[{"model":"gpt-5.5","effort":"xhigh"}]`,
 		PromptFilterMode:                 "monitor",
@@ -1196,6 +1197,9 @@ func TestSQLiteSystemSettingsPersistsFirstTokenTimeoutSeconds(t *testing.T) {
 	}
 	if settings.CodexModelMapping != `{"gpt-5.2":"gpt-5.5"}` {
 		t.Fatalf("CodexModelMapping = %q, want gpt-5.2 mapping", settings.CodexModelMapping)
+	}
+	if settings.ModelPricing != `{"grok-4.3":{"input":1.25,"output":2.5,"cache_read":0.2}}` {
+		t.Fatalf("ModelPricing = %q, want grok-4.3 pricing", settings.ModelPricing)
 	}
 	if settings.CodexUserAgentConfig != `{"terminal":"xterm-256color","os_name":"Linux","os_version":"Unknown"}` {
 		t.Fatalf("CodexUserAgentConfig = %q, want custom UA config", settings.CodexUserAgentConfig)

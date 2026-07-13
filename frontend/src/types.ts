@@ -620,6 +620,8 @@ export interface SystemSettings {
   model_mapping: string
   codex_model_mapping: string
   reasoning_effort_models: string
+  model_pricing: string
+  model_pricing_defaults?: string
   resin_url: string
   resin_platform_name: string
   prompt_filter_enabled: boolean

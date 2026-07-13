@@ -71,6 +71,49 @@ func (db *DB) ListModelRegistry(ctx context.Context) ([]ModelRegistryRow, error)
 	return result, nil
 }
 
+// GetModelRegistryRow returns one model registry row by id. Missing rows return nil, nil.
+func (db *DB) GetModelRegistryRow(ctx context.Context, id string) (*ModelRegistryRow, error) {
+	var row ModelRegistryRow
+	var lastSeenRaw, updatedRaw interface{}
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT id, enabled, category, source, pro_only, api_key_auth_available, last_seen_at, updated_at
+		FROM model_registry
+		WHERE id = $1
+	`, id).Scan(
+		&row.ID,
+		&row.Enabled,
+		&row.Category,
+		&row.Source,
+		&row.ProOnly,
+		&row.APIKeyAuthAvailable,
+		&lastSeenRaw,
+		&updatedRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	lastSeen, err := parseDBNullTimeValue(lastSeenRaw)
+	if err != nil {
+		return nil, err
+	}
+	updatedAt, err := parseDBTimeValue(updatedRaw)
+	if err != nil {
+		return nil, err
+	}
+	row.LastSeenAt = lastSeen
+	row.UpdatedAt = updatedAt
+	return &row, nil
+}
+
+// DeleteModelRegistryRow removes one model registry row by id.
+func (db *DB) DeleteModelRegistryRow(ctx context.Context, id string) error {
+	_, err := db.conn.ExecContext(ctx, `DELETE FROM model_registry WHERE id = $1`, id)
+	return err
+}
+
 // UpsertModelRegistryRows merges model entries without deleting other rows.
 func (db *DB) UpsertModelRegistryRows(ctx context.Context, models []ModelRegistryRow) error {
 	if len(models) == 0 {

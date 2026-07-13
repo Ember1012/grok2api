@@ -428,6 +428,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/prompt-filter/rules/test", h.TestPromptFilterRulePattern)
 	api.GET("/prompt-filter/rules", h.GetPromptFilterRules)
 	api.GET("/models", h.ListModels)
+	api.POST("/models", h.AddModel)
+	api.DELETE("/models/:id", h.DeleteModel)
 	api.POST("/models/sync", h.SyncModels)
 	api.GET("/image-prompts", h.ListImagePromptTemplates)
 	api.POST("/image-prompts", h.CreateImagePromptTemplate)
@@ -5796,6 +5798,8 @@ type settingsResponse struct {
 	ExpiredCleaned                     int     `json:"expired_cleaned,omitempty"`
 	ModelMapping                       string  `json:"model_mapping"`
 	CodexModelMapping                  string  `json:"codex_model_mapping"`
+	ModelPricing                       string  `json:"model_pricing"`
+	ModelPricingDefaults               string  `json:"model_pricing_defaults"`
 	ReasoningEffortModels              string  `json:"reasoning_effort_models"`
 	ResinURL                           string  `json:"resin_url"`
 	ResinPlatformName                  string  `json:"resin_platform_name"`
@@ -5888,6 +5892,7 @@ type updateSettingsReq struct {
 	AllowRemoteMigration               *bool    `json:"allow_remote_migration"`
 	ModelMapping                       *string  `json:"model_mapping"`
 	CodexModelMapping                  *string  `json:"codex_model_mapping"`
+	ModelPricing                       *string  `json:"model_pricing"`
 	ReasoningEffortModels              *string  `json:"reasoning_effort_models"`
 	ResinURL                           *string  `json:"resin_url"`
 	ResinPlatformName                  *string  `json:"resin_platform_name"`
@@ -6482,6 +6487,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		CacheLabel:                         h.cacheLabel,
 		ModelMapping:                       h.store.GetModelMapping(),
 		CodexModelMapping:                  h.store.GetCodexModelMapping(),
+		ModelPricing:                       h.store.GetModelPricingJSON(),
+		ModelPricingDefaults:               database.DefaultModelPricingJSON(),
 		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
 		ResinURL:                           resinURL,
 		ResinPlatformName:                  resinPlatformName,
@@ -6923,6 +6930,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.store.SetCodexModelMapping(*req.CodexModelMapping)
 		log.Printf("设置已更新: codex_model_mapping")
 	}
+	if req.ModelPricing != nil {
+		h.store.SetModelPricing(*req.ModelPricing)
+		log.Printf("设置已更新: model_pricing")
+	}
 	if req.ReasoningEffortModels != nil {
 		normalized, err := proxy.NormalizeReasoningEffortModelsJSON(*req.ReasoningEffortModels, proxy.SupportedModelIDs(c.Request.Context(), h.db))
 		if err != nil {
@@ -7246,6 +7257,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		AllowRemoteMigration:               h.store.GetAllowRemoteMigration() && hasAdminSecret,
 		ModelMapping:                       h.store.GetModelMapping(),
 		CodexModelMapping:                  h.store.GetCodexModelMapping(),
+		ModelPricing:                       h.store.GetModelPricingJSON(),
 		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
 		ResinURL:                           resinURL,
 		ResinPlatformName:                  resinPlatformName,
@@ -7353,6 +7365,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ExpiredCleaned:                     expiredCleaned,
 		ModelMapping:                       h.store.GetModelMapping(),
 		CodexModelMapping:                  h.store.GetCodexModelMapping(),
+		ModelPricing:                       h.store.GetModelPricingJSON(),
+		ModelPricingDefaults:               database.DefaultModelPricingJSON(),
 		ReasoningEffortModels:              h.store.GetReasoningEffortModels(),
 		ResinURL:                           resinURL,
 		ResinPlatformName:                  resinPlatformName,
@@ -7742,6 +7756,59 @@ func (h *Handler) MigrateAccounts(c *gin.Context) {
 // ListModels 返回支持的模型列表（供前端设置页使用）
 func (h *Handler) ListModels(c *gin.Context) {
 	catalog, _ := proxy.ListModelCatalog(c.Request.Context(), h.db)
+	c.JSON(http.StatusOK, catalog)
+}
+
+// AddModel 手动添加 Grok 模型到注册表。
+func (h *Handler) AddModel(c *gin.Context) {
+	var req struct {
+		ID       string `json:"id"`
+		Category string `json:"category"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "请求参数无效")
+		return
+	}
+	catalog, err := proxy.AddManualModel(c.Request.Context(), h.db, req.ID, req.Category)
+	if err != nil {
+		msg := err.Error()
+		status := http.StatusInternalServerError
+		switch {
+		case strings.Contains(msg, "不能为空"),
+			strings.Contains(msg, "仅支持"),
+			strings.Contains(msg, "category"):
+			status = http.StatusBadRequest
+		case strings.Contains(msg, "已存在"):
+			status = http.StatusConflict
+		}
+		writeError(c, status, msg)
+		return
+	}
+	c.JSON(http.StatusOK, catalog)
+}
+
+// DeleteModel 删除手动添加的模型。
+func (h *Handler) DeleteModel(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		writeError(c, http.StatusBadRequest, "模型 ID 不能为空")
+		return
+	}
+	catalog, err := proxy.RemoveManualModel(c.Request.Context(), h.db, id)
+	if err != nil {
+		msg := err.Error()
+		status := http.StatusInternalServerError
+		switch {
+		case strings.Contains(msg, "不能为空"):
+			status = http.StatusBadRequest
+		case strings.Contains(msg, "不存在"):
+			status = http.StatusNotFound
+		case strings.Contains(msg, "不可删除"), strings.Contains(msg, "仅可删除"):
+			status = http.StatusBadRequest
+		}
+		writeError(c, status, msg)
+		return
+	}
 	c.JSON(http.StatusOK, catalog)
 }
 

@@ -1,6 +1,10 @@
 package database
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+	"sync/atomic"
+)
 
 const longContextThreshold = 272000
 
@@ -25,6 +29,12 @@ type modelPricingRule struct {
 	pricing ModelPricing
 }
 
+type runtimeModelPriceJSON struct {
+	Input     float64 `json:"input"`
+	Output    float64 `json:"output"`
+	CacheRead float64 `json:"cache_read"`
+}
+
 type CostBreakdown struct {
 	InputCost                 float64 `json:"input_cost"`
 	OutputCost                float64 `json:"output_cost"`
@@ -40,6 +50,17 @@ type CostBreakdown struct {
 
 var (
 	defaultModelPricing = &ModelPricing{InputPricePerMToken: 1.0, OutputPricePerMToken: 2.0}
+
+	// runtimeModelPricingRules holds admin-configured overrides (exact then longest prefix).
+	runtimeModelPricingRules atomic.Value // []modelPricingRule
+
+	defaultGrokPricingRules = []modelPricingRule{
+		{model: "grok-4.5", pricing: ModelPricing{InputPricePerMToken: 2.0, OutputPricePerMToken: 6.0, CacheReadPricePerMToken: 0.5}},
+		{model: "grok-4.3", pricing: ModelPricing{InputPricePerMToken: 1.25, OutputPricePerMToken: 2.5, CacheReadPricePerMToken: 0.2}},
+		{model: "grok-build-0.1", pricing: ModelPricing{InputPricePerMToken: 1.0, OutputPricePerMToken: 2.0, CacheReadPricePerMToken: 0.2}},
+		{model: "grok-latest", pricing: ModelPricing{InputPricePerMToken: 1.25, OutputPricePerMToken: 2.5, CacheReadPricePerMToken: 0.2}},
+		{model: "grok", pricing: ModelPricing{InputPricePerMToken: 1.25, OutputPricePerMToken: 2.5, CacheReadPricePerMToken: 0.2}},
+	}
 
 	modelPricingRules = []modelPricingRule{
 		{model: "gpt-5.5", pricing: ModelPricing{
@@ -124,8 +145,50 @@ var (
 	}
 )
 
+// SetRuntimeModelPricing parses admin model pricing JSON into a thread-safe cache.
+// Empty / "{}" clears the override so built-in defaults apply.
+func SetRuntimeModelPricing(raw string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		runtimeModelPricingRules.Store([]modelPricingRule(nil))
+		return
+	}
+	var parsed map[string]runtimeModelPriceJSON
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil || len(parsed) == 0 {
+		runtimeModelPricingRules.Store([]modelPricingRule(nil))
+		return
+	}
+	rules := make([]modelPricingRule, 0, len(parsed))
+	for model, price := range parsed {
+		model = normalizeBillingModelName(model)
+		if model == "" {
+			continue
+		}
+		rules = append(rules, modelPricingRule{
+			model: model,
+			pricing: ModelPricing{
+				InputPricePerMToken:     price.Input,
+				OutputPricePerMToken:    price.Output,
+				CacheReadPricePerMToken: price.CacheRead,
+			},
+		})
+	}
+	runtimeModelPricingRules.Store(rules)
+}
+
+// DefaultModelPricingJSON returns built-in Grok default pricing for admin APIs.
+func DefaultModelPricingJSON() string {
+	return `{"grok":{"input":1.25,"output":2.5,"cache_read":0.2},"grok-4.3":{"input":1.25,"output":2.5,"cache_read":0.2},"grok-4.5":{"input":2,"output":6,"cache_read":0.5},"grok-build-0.1":{"input":1,"output":2,"cache_read":0.2},"grok-latest":{"input":1.25,"output":2.5,"cache_read":0.2}}`
+}
+
 func GetModelPricing(model string) *ModelPricing {
 	normalized := normalizeBillingModelName(model)
+	if pricing := runtimeModelPricing(normalized); pricing != nil {
+		return pricing
+	}
+	if pricing := pricingFromRules(normalized, defaultGrokPricingRules); pricing != nil {
+		return pricing
+	}
 	if pricing := claudeFamilyPricing(normalized); pricing != nil {
 		return pricing
 	}
@@ -139,6 +202,18 @@ func GetModelPricing(model string) *ModelPricing {
 		return pricing
 	}
 	return defaultModelPricing
+}
+
+func runtimeModelPricing(model string) *ModelPricing {
+	v := runtimeModelPricingRules.Load()
+	if v == nil {
+		return nil
+	}
+	rules, ok := v.([]modelPricingRule)
+	if !ok || len(rules) == 0 {
+		return nil
+	}
+	return pricingFromRules(model, rules)
 }
 
 func CalculateCost(inputTokens, outputTokens, cachedTokens int, model string, serviceTier string) float64 {
@@ -268,10 +343,14 @@ func normalizeCodexBillingModel(model string) (string, bool) {
 }
 
 func modelRulePricing(model string) *ModelPricing {
+	return pricingFromRules(model, modelPricingRules)
+}
+
+func pricingFromRules(model string, rules []modelPricingRule) *ModelPricing {
 	bestIdx := -1
 	bestLen := -1
-	for i := range modelPricingRules {
-		rule := modelPricingRules[i]
+	for i := range rules {
+		rule := rules[i]
 		if modelMatchesRule(model, rule.model) && len(rule.model) > bestLen {
 			bestIdx = i
 			bestLen = len(rule.model)
@@ -280,7 +359,7 @@ func modelRulePricing(model string) *ModelPricing {
 	if bestIdx == -1 {
 		return nil
 	}
-	return &modelPricingRules[bestIdx].pricing
+	return &rules[bestIdx].pricing
 }
 
 func modelMatchesRule(model string, rule string) bool {

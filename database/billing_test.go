@@ -2,8 +2,61 @@ package database
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
+
+func TestGetModelPricingGrokDefaultsAndRuntimeOverride(t *testing.T) {
+	t.Cleanup(func() { SetRuntimeModelPricing("") })
+	SetRuntimeModelPricing("")
+
+	cases := []struct {
+		model      string
+		wantInput  float64
+		wantOutput float64
+		wantCache  float64
+	}{
+		{model: "grok-4.3", wantInput: 1.25, wantOutput: 2.5, wantCache: 0.2},
+		{model: "grok-build-0.1", wantInput: 1.0, wantOutput: 2.0, wantCache: 0.2},
+		{model: "grok", wantInput: 1.25, wantOutput: 2.5, wantCache: 0.2},
+		{model: "grok-latest", wantInput: 1.25, wantOutput: 2.5, wantCache: 0.2},
+		{model: "grok-4.5", wantInput: 2.0, wantOutput: 6.0, wantCache: 0.5},
+	}
+	for _, tt := range cases {
+		t.Run("default/"+tt.model, func(t *testing.T) {
+			got := GetModelPricing(tt.model)
+			assertPricing(t, got, tt.wantInput, tt.wantOutput)
+			if math.Abs(got.CacheReadPricePerMToken-tt.wantCache) > 1e-12 {
+				t.Fatalf("cache_read = %.12f, want %.12f", got.CacheReadPricePerMToken, tt.wantCache)
+			}
+		})
+	}
+
+	SetRuntimeModelPricing(`{"grok-4.3":{"input":9.9,"output":8.8,"cache_read":0.1}}`)
+	over := GetModelPricing("grok-4.3")
+	assertPricing(t, over, 9.9, 8.8)
+	if math.Abs(over.CacheReadPricePerMToken-0.1) > 1e-12 {
+		t.Fatalf("runtime cache_read = %.12f, want 0.1", over.CacheReadPricePerMToken)
+	}
+	// Unrelated Grok model still uses built-in default.
+	assertPricing(t, GetModelPricing("grok-build-0.1"), 1.0, 2.0)
+
+	SetRuntimeModelPricing("")
+	assertPricing(t, GetModelPricing("grok-4.3"), 1.25, 2.5)
+	if math.Abs(GetModelPricing("grok-4.3").CacheReadPricePerMToken-0.2) > 1e-12 {
+		t.Fatal("cleared runtime should fall back to grok-4.3 default cache 0.2")
+	}
+}
+
+func TestDefaultModelPricingJSONContainsGrok(t *testing.T) {
+	raw := DefaultModelPricingJSON()
+	if raw == "" || raw == "{}" {
+		t.Fatal("DefaultModelPricingJSON empty")
+	}
+	if !strings.Contains(raw, "grok-4.3") || !strings.Contains(raw, "grok-build-0.1") {
+		t.Fatalf("DefaultModelPricingJSON missing expected keys: %s", raw)
+	}
+}
 
 func TestGetModelPricingUsesMostSpecificOpenAIPrefix(t *testing.T) {
 	tests := []struct {

@@ -177,3 +177,48 @@ func TestReasoningEffortModelsAreIncludedInCatalog(t *testing.T) {
 		t.Fatalf("reasoning alias should not be used for direct connection tests")
 	}
 }
+
+func TestAddAndRemoveManualModel(t *testing.T) {
+	db := newTestModelRegistryDB(t)
+	ctx := context.Background()
+
+	catalog, err := AddManualModel(ctx, db, "  grok-manual-test  ", "")
+	if err != nil {
+		t.Fatalf("AddManualModel error: %v", err)
+	}
+	if !slices.Contains(catalog.Models, "grok-manual-test") {
+		t.Fatalf("catalog missing manual model: %v", catalog.Models)
+	}
+	var manual *ModelInfo
+	for i := range catalog.Items {
+		if catalog.Items[i].ID == "grok-manual-test" {
+			manual = &catalog.Items[i]
+			break
+		}
+	}
+	if manual == nil || manual.Source != ModelSourceManual || !manual.Enabled {
+		t.Fatalf("manual model metadata unexpected: %#v", manual)
+	}
+	if manual.Category != ModelCategoryText {
+		t.Fatalf("manual model category = %q, want text", manual.Category)
+	}
+
+	if _, err := AddManualModel(ctx, db, "gpt-4", ""); err == nil {
+		t.Fatalf("AddManualModel should reject non-grok id")
+	}
+	if _, err := AddManualModel(ctx, db, "grok-manual-test", ""); err == nil {
+		t.Fatalf("AddManualModel should reject duplicate id")
+	}
+
+	removed, err := RemoveManualModel(ctx, db, "grok-manual-test")
+	if err != nil {
+		t.Fatalf("RemoveManualModel error: %v", err)
+	}
+	if slices.Contains(removed.Models, "grok-manual-test") {
+		t.Fatalf("manual model should be removed: %v", removed.Models)
+	}
+
+	if _, err := RemoveManualModel(ctx, db, DefaultGrokModelID); err == nil {
+		t.Fatalf("RemoveManualModel should reject builtin model")
+	}
+}

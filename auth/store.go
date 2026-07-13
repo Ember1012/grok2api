@@ -2191,6 +2191,7 @@ type Store struct {
 	allowRemoteMigration  atomic.Bool  // 是否允许远程迁移拉取账号
 	modelMapping          atomic.Value // 模型映射 JSON 字符串
 	codexModelMapping     atomic.Value // Codex 模型映射 JSON 字符串
+	modelPricing          atomic.Value // 模型定价 JSON 字符串
 	reasoningEffortModels atomic.Value // 带思考强度的模型别名 JSON 数组
 	schedulerMode         atomic.Value // string: "round_robin" or "remaining_quota"
 	affinityMode          atomic.Value // string: "bounded" / "off" / "strict"
@@ -2638,6 +2639,13 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	}
 	if settings.CodexModelMapping != "" {
 		s.codexModelMapping.Store(settings.CodexModelMapping)
+	}
+	if mp := strings.TrimSpace(settings.ModelPricing); mp != "" && mp != "{}" {
+		s.modelPricing.Store(mp)
+		database.SetRuntimeModelPricing(mp)
+	} else {
+		s.modelPricing.Store("{}")
+		database.SetRuntimeModelPricing("")
 	}
 	if settings.ReasoningEffortModels != "" {
 		s.reasoningEffortModels.Store(settings.ReasoningEffortModels)
@@ -4372,6 +4380,27 @@ func (s *Store) SetCodexModelMapping(mapping string) {
 func (s *Store) GetCodexModelMapping() string {
 	if v, ok := s.codexModelMapping.Load().(string); ok && v != "" {
 		return v
+	}
+	return "{}"
+}
+
+// SetModelPricing 动态更新模型定价 JSON，并同步 runtime 计费表。
+func (s *Store) SetModelPricing(mapping string) {
+	if mp := strings.TrimSpace(mapping); mp == "" || mp == "{}" {
+		s.modelPricing.Store("{}")
+		database.SetRuntimeModelPricing("")
+		return
+	}
+	s.modelPricing.Store(mapping)
+	database.SetRuntimeModelPricing(mapping)
+}
+
+// GetModelPricingJSON 获取当前模型定价 JSON
+func (s *Store) GetModelPricingJSON() string {
+	if v, ok := s.modelPricing.Load().(string); ok {
+		if mp := strings.TrimSpace(v); mp != "" && mp != "{}" {
+			return v
+		}
 	}
 	return "{}"
 }
