@@ -57,6 +57,7 @@ import {
   ArrowDownToLine,
   Eye,
   EyeOff,
+  Key,
   KeyRound,
   ExternalLink,
   FileText,
@@ -767,19 +768,21 @@ export default function Accounts() {
     done: false,
   });
   const [addMethod, setAddMethod] = useState<
-    "rt" | "st" | "at" | "session" | "openai" | "oauth"
+    "rt" | "st" | "at" | "session" | "openai" | "oauth" | "sso"
   >("oauth");
   const [atForm, setAtForm] = useState<AddATAccountRequest>({
     access_token: "",
     proxy_url: "",
   });
+  const [ssoText, setSsoText] = useState("");
+  const [ssoProxyUrl, setSsoProxyUrl] = useState("");
   const [sessionJson, setSessionJson] = useState("");
   const [sessionProxyUrl, setSessionProxyUrl] = useState("");
   // 允许重复添加：勾选后本次添加/导入跳过去重，强制新建（添加弹窗与导入弹窗共用）。
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [openAIForm, setOpenAIForm] =
     useState<AddOpenAIResponsesAccountRequest>({
-      base_url: "https://api.openai.com",
+      base_url: "https://api.x.ai",
       api_key: "",
       models: [],
       proxy_url: "",
@@ -1634,8 +1637,6 @@ export default function Accounts() {
     }
     setSubmitting(true);
     try {
-      // 始终走流式：即使只添加一个 access_token 也展示进度条，并能反映
-      // 身份去重/合并结果（已有账号更新、重复跳过）。
       const res = await postAdminSSE("/accounts/at?stream=true", {
         ...atForm,
         allow_duplicate: allowDuplicate,
@@ -1655,6 +1656,46 @@ export default function Accounts() {
       setSubmitting(false);
     }
   };
+
+  const handleAddSSO = async () => {
+    const parsedCustomHeaders = parseCustomHeadersText(addCustomHeadersText);
+    if (!parsedCustomHeaders.ok) {
+      showToast(
+        t("accounts.ssoFailed", { error: "Invalid custom headers" }),
+        "error",
+      );
+      return;
+    }
+    const tokens = ssoText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return;
+
+    setSubmitting(true);
+    try {
+      const res = await postAdminSSE("/accounts/sso?stream=true", {
+        sso_tokens: tokens,
+        proxy_url: ssoProxyUrl.trim() || undefined,
+        allow_duplicate: allowDuplicate,
+        custom_headers: parsedCustomHeaders.value,
+      });
+      setShowAdd(false);
+      await readImportSSE(res);
+      showToast(t("accounts.ssoSuccess"));
+      void reload();
+    } catch (error) {
+      showToast(
+        t("accounts.ssoFailed", { error: getErrorMessage(error) }),
+        "error",
+      );
+    } finally {
+      setSubmitting(false);
+      setSsoText("");
+      setSsoProxyUrl("");
+    }
+  };
+
 
   const addOpenAIModelValues = useCallback((raw: string) => {
     const nextModels = parseModelTokens(raw);
@@ -1766,7 +1807,7 @@ export default function Accounts() {
       showToast(t("accounts.addSuccess"));
       setShowAdd(false);
       setOpenAIForm({
-        base_url: "https://api.openai.com",
+        base_url: "https://api.x.ai",
         api_key: "",
         models: [],
         proxy_url: "",
@@ -4601,14 +4642,20 @@ export default function Accounts() {
               writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
               setOauthName("");
               setOpenAIForm({
-                base_url: "https://api.openai.com",
+                base_url: "https://api.x.ai",
                 api_key: "",
                 models: [],
                 proxy_url: "",
               });
               setOpenAIModelDraft("");
+              setAtForm({
+                access_token: "",
+                proxy_url: "",
+              });
               setSessionJson("");
               setSessionProxyUrl("");
+              setSsoText("");
+              setSsoProxyUrl("");
               setAddCustomHeadersText("");
             }}
             footer={
@@ -4616,7 +4663,8 @@ export default function Accounts() {
                 {(addMethod === "rt" ||
                   addMethod === "st" ||
                   addMethod === "at" ||
-                  addMethod === "session") && (
+                  addMethod === "session" ||
+                  addMethod === "sso") && (
                   <label className="mr-auto flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
@@ -4638,7 +4686,7 @@ export default function Accounts() {
                     writeStoredOAuthSession(OAUTH_SESSION_STORAGE_KEY, null);
                     setOauthName("");
                     setOpenAIForm({
-                      base_url: "https://api.openai.com",
+                      base_url: "https://api.x.ai",
                       api_key: "",
                       models: [],
                       proxy_url: "",
@@ -4646,6 +4694,12 @@ export default function Accounts() {
                     setOpenAIModelDraft("");
                     setSessionJson("");
                     setSessionProxyUrl("");
+                    setAtForm({
+                      access_token: "",
+                      proxy_url: "",
+                    });
+                    setSsoText("");
+                    setSsoProxyUrl("");
                     setAddCustomHeadersText("");
                   }}
                 >
@@ -4672,6 +4726,24 @@ export default function Accounts() {
                   >
                     {submitting ? t("accounts.adding") : t("accounts.submit")}
                   </Button>
+                ) : addMethod === "sso" ? (
+                  <Button
+                    onClick={() => void handleAddSSO()}
+                    disabled={submitting || !ssoText.trim()}
+                  >
+                    {submitting ? t("accounts.ssoProgress") : t("accounts.submit")}
+                  </Button>
+                ) : addMethod === "openai" ? (
+                  <Button
+                    onClick={() => void handleAddOpenAIResponses()}
+                    disabled={
+                      submitting ||
+                      !openAIForm.api_key.trim() ||
+                      openAIForm.models.length === 0
+                    }
+                  >
+                    {submitting ? t("common.loading") : t("common.confirm")}
+                  </Button>
                 ) : oauthStep === "generate" ? (
                   <Button
                     onClick={() => void handleOAuthGenerate()}
@@ -4695,7 +4767,7 @@ export default function Accounts() {
             }
           >
             {/* Tab switcher */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1 p-1 mb-5 rounded-xl bg-muted/50 border border-border">
               <button
                 onClick={() => {
                   setAddMethod("oauth");
@@ -4735,15 +4807,26 @@ export default function Accounts() {
                 {t("accounts.addMethodSessionToken")}
               </button>
               <button
-                onClick={() => setAddMethod("at")}
+                onClick={() => setAddMethod("sso")}
                 className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
-                  addMethod === "at"
+                  addMethod === "sso"
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 <Fingerprint className="size-3.5" />
-                {t("accounts.addMethodAT")}
+                {t("accounts.addMethodSSO")}
+              </button>
+              <button
+                onClick={() => setAddMethod("openai")}
+                className={`min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold whitespace-nowrap transition-all ${
+                  addMethod === "openai"
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Key className="size-3.5" />
+                {t("accounts.addMethodOpenAI")}
               </button>
             </div>
 
@@ -4879,6 +4962,36 @@ export default function Accounts() {
                   onChange: setAddCustomHeadersText,
                 })}
               </div>
+            ) : addMethod === "sso" ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+                  {t("accounts.ssoHint")}
+                </div>
+                <div>
+                  <label className="block mb-2 text-sm font-semibold text-muted-foreground">
+                    {t("accounts.ssoLabel")} *
+                  </label>
+                  <textarea
+                    className="w-full min-h-[220px] p-3 border border-input rounded-xl bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder={t("accounts.ssoPlaceholder")}
+                    value={ssoText}
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                      setSsoText(event.target.value)
+                    }
+                    rows={8}
+                  />
+                </div>
+                {renderProxyInput({
+                  value: ssoProxyUrl,
+                  testKey: "add-sso-token",
+                  label: t("accounts.importProxyLabel"),
+                  onChange: setSsoProxyUrl,
+                })}
+                {renderCustomHeadersTextarea({
+                  value: addCustomHeadersText,
+                  onChange: setAddCustomHeadersText,
+                })}
+              </div>
             ) : addMethod === "openai" ? (
               <div className="space-y-4">
                 <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
@@ -4907,7 +5020,7 @@ export default function Accounts() {
                     {t("accounts.openaiBaseUrl")} *
                   </label>
                   <Input
-                    placeholder="https://api.openai.com"
+                    placeholder="https://api.x.ai"
                     value={openAIForm.base_url}
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setOpenAIForm((form) => ({
@@ -4923,7 +5036,7 @@ export default function Accounts() {
                   </label>
                   <Input
                     type="password"
-                    placeholder="sk-proj-..."
+                    placeholder="xai-..."
                     value={openAIForm.api_key}
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setOpenAIForm((form) => ({

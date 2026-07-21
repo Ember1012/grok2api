@@ -43,24 +43,24 @@ import (
 
 // Handler 管理后台 API 处理器
 type Handler struct {
-	store                  *auth.Store
-	cache                  cache.TokenCache
-	db                     *database.DB
-	rateLimiter            *proxy.RateLimiter
-	systemUpdate           *systemUpdater
-	systemUpdateOnce       sync.Once
-	refreshAccount func(context.Context, int64) error
-	probeUsage     func(context.Context, *auth.Account) error
-	cpuSampler     *cpuSampler
-	startedAt              time.Time
-	pgMaxConns             int
-	redisPoolSize          int
-	databaseDriver         string
-	databaseLabel          string
-	cacheDriver            string
-	cacheLabel             string
-	adminSecretEnv         string
-	imageProxy             *proxy.Handler
+	store            *auth.Store
+	cache            cache.TokenCache
+	db               *database.DB
+	rateLimiter      *proxy.RateLimiter
+	systemUpdate     *systemUpdater
+	systemUpdateOnce sync.Once
+	refreshAccount   func(context.Context, int64) error
+	probeUsage       func(context.Context, *auth.Account) error
+	cpuSampler       *cpuSampler
+	startedAt        time.Time
+	pgMaxConns       int
+	redisPoolSize    int
+	databaseDriver   string
+	databaseLabel    string
+	cacheDriver      string
+	cacheLabel       string
+	adminSecretEnv   string
+	imageProxy       *proxy.Handler
 
 	// 图表聚合内存缓存（10秒 TTL）
 	chartCacheMu   sync.RWMutex
@@ -359,6 +359,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/accounts", h.ListAccounts)
 	api.POST("/accounts", h.AddAccount)
 	api.POST("/accounts/at", h.AddATAccount)
+	api.POST("/accounts/sso", h.AddSSOAccount)
 	api.POST("/accounts/openai-responses", h.AddOpenAIResponsesAccount)
 	api.POST("/accounts/openai-responses/models", h.FetchOpenAIResponsesModels)
 	api.PATCH("/accounts/:id/openai-responses", h.UpdateOpenAIResponsesAccount)

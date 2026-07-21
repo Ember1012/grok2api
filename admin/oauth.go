@@ -233,69 +233,42 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 
 	// Resin 临时身份用于 OAuth 兑换（新账号尚无 DBID）
 	resinTempID := "oauth-" + req.SessionID
-	tokenResp, accountInfo, err := doOAuthCodeExchange(c.Request.Context(), req.Code, sess.CodeVerifier, sess.RedirectURI, proxyURL, resinTempID)
+	tokenResp, _, err := doOAuthCodeExchange(c.Request.Context(), req.Code, sess.CodeVerifier, sess.RedirectURI, proxyURL, resinTempID)
 	if err != nil {
 		writeError(c, http.StatusBadGateway, "授权码兑换失败: "+err.Error())
 		return
 	}
 	globalOAuthStore.delete(req.SessionID)
 
-	if tokenResp.RefreshToken == "" {
-		writeError(c, http.StatusBadGateway, "授权服务器未返回 refresh_token，请确认已开启 offline_access scope")
-		return
-	}
-	seed := normalizeTokenCredentialSeed(tokenCredentialSeed{
-		refreshToken: tokenResp.RefreshToken,
-		accessToken:  tokenResp.AccessToken,
-		idToken:      tokenResp.IDToken,
-		expiresIn:    tokenResp.ExpiresIn,
-		platform:     "grok",
-		baseURL:      "https://api.x.ai/v1",
-	})
-
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	name := strings.TrimSpace(req.Name)
-	if name == "" && seed.email != "" {
-		name = seed.email
-	}
-	if name == "" {
-		name = "oauth-account"
-	}
-
-	id, updated, err := h.upsertOAuthIdentityAccount(ctx, name, proxyURL, seed, "oauth")
+	result, err := h.UpsertOAuthAccountFromTokenInfo(ctx, tokenResp, req.Name, proxyURL, "oauth", false)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "账号写入数据库失败: "+err.Error())
 		return
 	}
-	if proxy.IsResinEnabled() && !updated {
-		go proxy.InheritLease(resinTempID, fmt.Sprintf("%d", id))
+	if proxy.IsResinEnabled() && !result.Updated {
+		go proxy.InheritLease(resinTempID, fmt.Sprintf("%d", result.ID))
 	}
 
-	email := ""
-	planType := ""
-	if accountInfo != nil {
-		email = accountInfo.Email
-		planType = accountInfo.PlanType
+	message := fmt.Sprintf("Grok 账号 %s 添加成功", strings.TrimSpace(req.Name))
+	if strings.TrimSpace(req.Name) == "" {
+		if result.Email != "" {
+			message = fmt.Sprintf("Grok 账号 %s 添加成功", result.Email)
+		} else {
+			message = "Grok 账号 oauth-account 添加成功"
+		}
 	}
-	if email == "" {
-		email = seed.email
-	}
-	if planType == "" {
-		planType = seed.planType
-	}
-
-	message := fmt.Sprintf("Grok 账号 %s 添加成功", name)
-	if updated {
-		message = fmt.Sprintf("Grok 账号已存在，已更新账号 %d", id)
+	if result.Updated {
+		message = fmt.Sprintf("Grok 账号已存在，已更新账号 %d", result.ID)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"message":   message,
-		"id":        id,
-		"email":     email,
-		"plan_type": planType,
-		"updated":   updated,
+		"id":        result.ID,
+		"email":     result.Email,
+		"plan_type": result.PlanType,
+		"updated":   result.Updated,
 	})
 }
 
@@ -566,14 +539,75 @@ func (h *Handler) UpdateOAuthAccountCode(c *gin.Context) {
 
 // ==================== 内部 HTTP 调用 ====================
 
-type rawOAuthTokenResp struct {
+type OAuthTokenInfo struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	IDToken      string `json:"id_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-func doOAuthCodeExchange(ctx context.Context, code, codeVerifier, redirectURI, proxyURL string, resinTempID ...string) (*rawOAuthTokenResp, *auth.AccountInfo, error) {
+type OAuthAccountUpsertResult struct {
+	ID       int64  `json:"id"`
+	Updated  bool   `json:"updated"`
+	Email    string `json:"email,omitempty"`
+	PlanType string `json:"plan_type,omitempty"`
+}
+
+func (h *Handler) UpsertOAuthAccountFromTokenInfo(ctx context.Context, tokenInfo *OAuthTokenInfo, name, proxyURL, source string, allowDuplicate bool) (*OAuthAccountUpsertResult, error) {
+	if tokenInfo == nil {
+		return nil, errors.New("token information is nil")
+	}
+	if strings.TrimSpace(tokenInfo.RefreshToken) == "" {
+		return nil, errors.New("授权服务器未返回 refresh_token，请确认已开启 offline_access scope")
+	}
+
+	seed := normalizeTokenCredentialSeed(tokenCredentialSeed{
+		refreshToken:   tokenInfo.RefreshToken,
+		accessToken:    tokenInfo.AccessToken,
+		idToken:        tokenInfo.IDToken,
+		expiresIn:      tokenInfo.ExpiresIn,
+		platform:       "grok",
+		baseURL:        "https://api.x.ai/v1",
+		allowDuplicate: allowDuplicate,
+	})
+	accountInfo := accountInfoFromTokens(tokenInfo.IDToken, tokenInfo.AccessToken)
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		if seed.email != "" {
+			name = seed.email
+		} else {
+			name = "oauth-account"
+		}
+	}
+
+	id, updated, err := h.upsertOAuthIdentityAccount(ctx, name, proxyURL, seed, source)
+	if err != nil {
+		return nil, err
+	}
+
+	email := ""
+	planType := ""
+	if accountInfo != nil {
+		email = accountInfo.Email
+		planType = accountInfo.PlanType
+	}
+	if email == "" {
+		email = seed.email
+	}
+	if planType == "" {
+		planType = seed.planType
+	}
+
+	return &OAuthAccountUpsertResult{
+		ID:       id,
+		Updated:  updated,
+		Email:    email,
+		PlanType: planType,
+	}, nil
+}
+
+func doOAuthCodeExchange(ctx context.Context, code, codeVerifier, redirectURI, proxyURL string, resinTempID ...string) (*OAuthTokenInfo, *auth.AccountInfo, error) {
 	form := neturl.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("client_id", oauthClientID)
@@ -621,7 +655,7 @@ func doOAuthCodeExchange(ctx context.Context, code, codeVerifier, redirectURI, p
 		return nil, nil, fmt.Errorf("token 兑换失败 (HTTP %d)", resp.StatusCode)
 	}
 
-	var tokenResp rawOAuthTokenResp
+	var tokenResp OAuthTokenInfo
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, nil, fmt.Errorf("解析响应失败: %w", err)
 	}
@@ -664,7 +698,7 @@ func (h *Handler) OAuthCallback(c *gin.Context) {
 		proxyURL = h.store.GetProxyURL()
 	}
 	resinTempID := "oauth-" + sessionID
-	tokenResp, accountInfo, err := doOAuthCodeExchange(c.Request.Context(), code, sess.CodeVerifier, sess.RedirectURI, proxyURL, resinTempID)
+	tokenResp, _, err := doOAuthCodeExchange(c.Request.Context(), code, sess.CodeVerifier, sess.RedirectURI, proxyURL, resinTempID)
 	if err != nil {
 		sess.ExchangeResult = &oauthExchangeResult{
 			Success: false,
@@ -682,19 +716,12 @@ func (h *Handler) OAuthCallback(c *gin.Context) {
 		c.String(http.StatusOK, oauthCallbackPage("授权失败", "未获取到 refresh_token，请确认已开启 offline_access", false))
 		return
 	}
-	seed := normalizeTokenCredentialSeed(tokenCredentialSeed{
-		refreshToken: tokenResp.RefreshToken,
-		accessToken:  tokenResp.AccessToken,
-		idToken:      tokenResp.IDToken,
-		expiresIn:    tokenResp.ExpiresIn,
-		platform:     "grok",
-		baseURL:      "https://api.x.ai/v1",
-	})
 
-	// 自动添加账号
 	name := ""
-	if seed.email != "" {
-		name = seed.email
+	if tokenResp != nil {
+		if info := accountInfoFromTokens(tokenResp.IDToken, tokenResp.AccessToken); info != nil && info.Email != "" {
+			name = info.Email
+		}
 	}
 	if name == "" {
 		name = "oauth-account"
@@ -703,7 +730,7 @@ func (h *Handler) OAuthCallback(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	id, updated, err := h.upsertOAuthIdentityAccount(ctx, name, proxyURL, seed, "oauth_callback")
+	result, err := h.UpsertOAuthAccountFromTokenInfo(ctx, tokenResp, name, proxyURL, "oauth_callback", false)
 	if err != nil {
 		sess.ExchangeResult = &oauthExchangeResult{
 			Success: false,
@@ -713,38 +740,29 @@ func (h *Handler) OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	if proxy.IsResinEnabled() && !updated {
-		go proxy.InheritLease(resinTempID, fmt.Sprintf("%d", id))
-	}
-
-	email := ""
-	planType := ""
-	if accountInfo != nil {
-		email = accountInfo.Email
-		planType = accountInfo.PlanType
-	}
-	if email == "" {
-		email = seed.email
-	}
-	if planType == "" {
-		planType = seed.planType
+	if proxy.IsResinEnabled() && !result.Updated {
+		go proxy.InheritLease(resinTempID, fmt.Sprintf("%d", result.ID))
 	}
 
 	message := fmt.Sprintf("账号 %s 添加成功", name)
 	pageMessage := fmt.Sprintf("账号 %s 已自动添加，可以关闭此页面。", name)
-	if updated {
-		message = fmt.Sprintf("账号已存在，已更新账号 %d", id)
-		pageMessage = fmt.Sprintf("账号已存在，已更新账号 %d，可以关闭此页面。", id)
+	if result.Email != "" {
+		message = fmt.Sprintf("账号 %s 添加成功", result.Email)
+		pageMessage = fmt.Sprintf("账号 %s 已自动添加，可以关闭此页面。", result.Email)
+	}
+	if result.Updated {
+		message = fmt.Sprintf("账号已存在，已更新账号 %d", result.ID)
+		pageMessage = fmt.Sprintf("账号已存在，已更新账号 %d，可以关闭此页面。", result.ID)
 	}
 	sess.ExchangeResult = &oauthExchangeResult{
 		Success:  true,
 		Message:  message,
-		ID:       id,
-		Email:    email,
-		PlanType: planType,
+		ID:       result.ID,
+		Email:    result.Email,
+		PlanType: result.PlanType,
 	}
 
-	log.Printf("OAuth 回调自动添加账号成功: id=%d email=%s", id, email)
+	log.Printf("OAuth 回调自动添加账号成功: id=%d email=%s", result.ID, result.Email)
 	c.String(http.StatusOK, oauthCallbackPage("授权成功", pageMessage, true))
 }
 
